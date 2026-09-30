@@ -564,11 +564,11 @@ const PerformanceMetricsCluster = ({
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-center">
         <div className="p-2 bg-[#F8F9FA] rounded-xl border border-[#E5E7EB]">
-          <div className="text-[9px] text-[#6B7280]">{'AVG WAIT ($\\bar{W}$)'}</div>
+          <div className="text-[9px] text-[#6B7280]">AVG WAIT (W̄)</div>
           <div className="text-base font-extrabold text-[#0284C7] mt-0.5">{avgWait}s</div>
         </div>
         <div className="p-2 bg-[#F8F9FA] rounded-xl border border-[#E5E7EB]">
-          <div className="text-[9px] text-[#6B7280]">{'AVG TAT ($\\bar{TAT}$)'}</div>
+          <div className="text-[9px] text-[#6B7280]">	AVG TAT (TAT̄)</div>
           <div className="text-base font-extrabold text-[#15803D] mt-0.5">{avgTAT}s</div>
         </div>
         <div className="p-2 bg-[#F8F9FA] rounded-xl border border-[#E5E7EB]">
@@ -606,7 +606,7 @@ const CircularQueueVisualizer = ({ activeLane, timeQuantum, signalTimer }) => {
     <div className="bg-white border border-[#D1D5DB] rounded-2xl p-4 shadow-sm text-xs font-mono text-[#111827] space-y-3">
       <div className="flex items-center justify-between border-b border-[#E5E7EB] pb-2">
         <h3 className="font-bold text-xs uppercase tracking-wider text-[#0284C7]">
-          Circular Queue Traversal Array ($i = (i+1) \bmod 4$)
+          Circular Queue Traversal Array (i = (i+1) mod 4)
         </h3>
       </div>
 
@@ -654,7 +654,7 @@ const PriorityQueueVisualizer = ({ laneData, agingEnabled }) => {
     <div className="bg-white border border-[#D1D5DB] rounded-2xl p-4 shadow-sm text-xs font-mono text-[#111827] space-y-3">
       <div className="flex items-center justify-between border-b border-[#E5E7EB] pb-2">
         <h3 className="font-bold text-xs uppercase tracking-wider text-[#7C3AED]">
-          Min-Heap Priority Queue (Sorted by Priority $P_i$)
+          Min-Heap Priority Queue (Sorted by Priority Pᵢ)
         </h3>
         <span className="text-[10px] text-[#6B7280]">{agingEnabled ? 'Aging Enabled' : 'Aging Disabled'}</span>
       </div>
@@ -1362,7 +1362,7 @@ const CompareAlgorithmsView = ({ initialQueues }) => {
       {/* Metrics Comparison Matrix */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-center">
         <div className="p-3 bg-[#F8F9FA] border border-[#E5E7EB] rounded-2xl space-y-2">
-          <div className="text-[10px] text-[#6B7280] font-bold uppercase">{'Average Waiting Time ($\\bar{W}$)'}</div>
+          <div className="text-[10px] text-[#6B7280] font-bold uppercase">	Average Waiting Time (W̄)</div>
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="p-2 bg-white rounded-xl border border-[#E5E7EB]">
               <div className="text-[9px] text-[#0284C7] font-bold">ROUND ROBIN</div>
@@ -1509,7 +1509,7 @@ const PlaybackControls = ({
 
         {selectedAlgo === 'RR' && (
           <div className="flex items-center space-x-2 bg-[#F8F9FA] border border-[#D1D5DB] px-3 py-1.5 rounded-xl text-xs font-sans">
-            <span className="text-[#4B5563] font-mono text-[11px]">Quantum ($q$):</span>
+            <span className="text-[#4B5563] font-mono text-[11px]">Quantum (q):</span>
             <span className="text-[#0284C7] font-bold font-mono">{timeQuantum}s</span>
             <input
               type="range"
@@ -1676,7 +1676,7 @@ const LandingPage = ({ onLaunchSimulator }) => {
               <div className="text-[10px] text-[#6B7280] uppercase tracking-wider font-bold">OPERATING SYSTEM METAPHOR DIRECTORY</div>
               <div className="grid grid-cols-2 gap-2 text-[11px]">
                 <div className="bg-[#F8F9FA] p-2 rounded-lg border border-[#E5E7EB]">
-                  <span className="text-[#6B7280]">Process Thread ($P_i$)</span> = <strong className="text-[#0284C7]">Traffic Lane Queue</strong>
+                  <span className="text-[#6B7280]">Process Thread (P<sub>i</sub>)</span> = <strong className="text-[#0284C7]">Traffic Lane Queue</strong>
                 </div>
                 <div className="bg-[#F8F9FA] p-2 rounded-lg border border-[#E5E7EB]">
                   <span className="text-[#6B7280]">CPU Time Slice</span> = <strong className="text-[#22C55E]">Green Signal Phase</strong>
@@ -1725,7 +1725,7 @@ const LandingPage = ({ onLaunchSimulator }) => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="p-5 bg-[#F8F9FA] border border-[#E5E7EB] rounded-2xl space-y-2">
               <div className="text-xs font-mono text-[#0284C7] font-bold uppercase">01 / PROCESS QUEUES</div>
-              <h3 className="font-bold text-base text-[#111827]">Lane Buffer = Ready Queue ($P_i$)</h3>
+              <h3 className="font-bold text-base text-[#111827]">Lane Buffer = Ready Queue (P<sub>i</sub>)</h3>
               <p className="text-xs text-[#4B5563] leading-relaxed">
                 Incoming lanes act as process ready queues holding threads waiting for CPU cycle allocation.
               </p>
@@ -1749,6 +1749,69 @@ const LandingPage = ({ onLaunchSimulator }) => {
           </div>
         </div>
       </section>
+            {/* Laboratory Manual */}
+      <section id="how-it-works" className="py-12 scroll-mt-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+          <div className="text-center max-w-2xl mx-auto space-y-2">
+            <span className="text-xs font-mono uppercase tracking-widest text-[#0284C7] font-bold">LABORATORY MANUAL</span>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-[#111827]">How to Run an Experiment</h2>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {[
+              { step: '01', color: 'text-[#0284C7]', title: 'Pick a Scenario', text: 'Choose a guided scenario (Normal, Heavy North, Emergency, Starvation) to load the initial ready queues.' },
+              { step: '02', color: 'text-[#22C55E]', title: 'Choose an Algorithm', text: 'Select FCFS, SJF, Round Robin or Priority + Aging. For RR, tune the time quantum with the slider.' },
+              { step: '03', color: 'text-[#CA8A04]', title: 'Execute & Observe', text: 'Hit Execute for auto-run or Clock Tick to step one second at a time and watch the CPU core dispatch.' },
+              { step: '04', color: 'text-[#0284C7]', title: 'Inject Threads', text: 'Add autos, buses or an ambulance interrupt (IRQ P1) mid-run to see preemption and starvation.' },
+              { step: '05', color: 'text-[#22C55E]', title: 'Read the Kernel Logs', text: 'Every context switch, semaphore wait/signal and aging promotion is logged in the decision terminal.' },
+              { step: '06', color: 'text-[#CA8A04]', title: 'Compare Metrics', text: 'Use Compare RR vs Priority to check average wait, throughput and context switch overhead.' }
+            ].map((item) => (
+              <div key={item.step} className="p-5 bg-white border border-[#E5E7EB] rounded-2xl space-y-2 shadow-sm">
+                <div className={`text-xs font-mono font-bold uppercase ${item.color}`}>STEP {item.step}</div>
+                <h3 className="font-bold text-base text-[#111827]">{item.title}</h3>
+                <p className="text-xs text-[#4B5563] leading-relaxed">{item.text}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="p-5 bg-white border border-[#E5E7EB] rounded-2xl shadow-sm font-mono text-xs space-y-2">
+            <div className="text-[#0284C7] font-bold uppercase">METRICS GLOSSARY</div>
+            <ul className="space-y-1 text-[#4B5563] font-sans">
+              <li><strong>Avg Wait (W̄):</strong> time a thread spends in the ready queue</li>
+              <li><strong>Avg TAT:</strong> completion time minus arrival time</li>
+              <li><strong>Throughput:</strong> processes completed per minute</li>
+              <li><strong>Starving Threads:</strong> threads waiting too long without CPU</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      {/* Scheduling Algorithms */}
+      <section id="algorithms" className="py-12 bg-white border-y border-[#D1D5DB] scroll-mt-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+          <div className="text-center max-w-2xl mx-auto space-y-2">
+            <span className="text-xs font-mono uppercase tracking-widest text-[#0284C7] font-bold">SCHEDULING ALGORITHMS</span>
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-[#111827]">Four Policies, One Intersection</h2>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {[
+              { tag: '01 / FCFS', color: 'text-[#0284C7]', title: 'First-Come, First-Served', text: 'Vehicles pass in arrival order. Simple, but one slow bus blocks everyone behind it (convoy effect).', meta: 'Non-preemptive | Starvation: No' },
+              { tag: '02 / SJF', color: 'text-[#22C55E]', title: 'Shortest Job First', text: 'The shortest CPU burst goes first. Gives the lowest average wait, but long jobs can starve.', meta: 'Non-preemptive | Starvation: Yes' },
+              { tag: '03 / ROUND ROBIN', color: 'text-[#CA8A04]', title: 'Round Robin', text: 'Each lane gets a fixed quantum of green time, then the pointer moves on: i = (i + 1) mod 4. Fair, but empty lanes still burn a slot.', meta: 'Preemptive | Starvation: No' },
+              { tag: '04 / PRIORITY + AGING', color: 'text-[#EF4444]', title: 'Priority + Dynamic Aging', text: 'A min-heap serves P1 (ambulance) first. Aging promotes waiting threads so low-priority bikes never starve.', meta: 'Preemptive | Starvation: Only without aging' }
+            ].map((a) => (
+              <div key={a.tag} className="p-5 bg-[#F8F9FA] border border-[#E5E7EB] rounded-2xl space-y-2">
+                <div className={`text-xs font-mono font-bold uppercase ${a.color}`}>{a.tag}</div>
+                <h3 className="font-bold text-base text-[#111827]">{a.title}</h3>
+                <p className="text-xs text-[#4B5563] leading-relaxed">{a.text}</p>
+                <div className="text-[10px] font-mono text-[#6B7280] pt-1">{a.meta}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+      
 
       {/* Footer */}
       <footer className="border-t border-[#D1D5DB] bg-white py-8">
@@ -2018,7 +2081,7 @@ const SimulationDashboard = ({ onBackToLanding }) => {
           setIsYellow(true);
           setContextSwitchCount((c) => c + 1);
           setActiveLane(nextLane);
-          setExplanationText(`Round Robin Quantum ($q=${timeQuantum}s$) expired for Queue ${activeLane}. Modulo pointer ($i=(${currIdx}+1)\\bmod 4 = ${nextIdx}$) switched dispatch to Queue ${nextLane}.`);
+          setExplanationText(`Round Robin Quantum (q=${timeQuantum}s) expired for Queue ${activeLane}. Modulo pointer (i=(${currIdx}+1) mod 4 = ${nextIdx}) switched dispatch to Queue ${nextLane}.`);
           addLog('CONTEXT_SWITCH', `RR Time Quantum depleted. Context switch initiated -> Yellow clearance phase -> Advancing pointer to Queue ${nextLane} (idx ${nextIdx}).`);
           addLog('SEMAPHORE', `signal(S) by ${activeLane} — releases critical section lock. wait(S) by ${nextLane} pending until clearance ends.`);
           return timeQuantum;
@@ -2088,7 +2151,7 @@ const SimulationDashboard = ({ onBackToLanding }) => {
           setActiveLane(bestLane);
           setExplanationText(
             selectedAlgo === 'FCFS'
-              ? `FCFS Dispatch: Queue ${bestLane} selected — Process ${bestCarId} has the earliest arrival timestamp ($t=${bestValue}s$) among all ready queues.`
+              ? `FCFS Dispatch: Queue ${bestLane} selected — Process ${bestCarId} has the earliest arrival timestamp (t=${bestValue}s) among all ready queues.`
               : `SJF Dispatch: Queue ${bestLane} selected — Process ${bestCarId} has the shortest next CPU burst (${bestValue}s) among all ready queues.`
           );
           addLog('CONTEXT_SWITCH', `${selectedAlgo} Scheduler dispatched Queue ${bestLane} (Process ${bestCarId}) non-preemptively.`);
