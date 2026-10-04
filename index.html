@@ -57,9 +57,9 @@
       stroke-dasharray: 8, 8;
       stroke-width: 2;
     }
-    .vehicle {
-      transition: transform 0.2s linear;
-    }
+    /* vehicles are positioned every animation frame by the simulation engine */
+    @keyframes ambulancePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+    .ambulance { animation: ambulancePulse 0.6s infinite; }
 
     /* Custom Scrollbar */
     ::-webkit-scrollbar {
@@ -289,12 +289,16 @@
                 <svg class="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
                 STEP TICK
               </button>
+
+              <button onclick="resetSim()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 font-extrabold text-sm px-4 py-2.5 rounded-xl border border-slate-700 transition-all">
+                RESET
+              </button>
             </div>
 
             <div class="flex items-center gap-3">
               <span class="text-xs font-black text-slate-400 uppercase tracking-widest">STATE:</span>
               <span id="stateBadge" class="bg-amber-500/20 text-amber-300 border border-amber-500/30 font-black text-xs px-3 py-1 rounded-md">
-                PAUSED
+                IDLE
               </span>
             </div>
           </div>
@@ -316,11 +320,8 @@
               <circle id="lightS" cx="255" cy="205" r="7" fill="#ef4444" />
               <circle id="lightW" cx="145" cy="205" r="7" fill="#ef4444" />
 
-              <!-- Active Traffic Visual Indicators -->
-              <g id="carN" class="vehicle" transform="translate(170, 20)"><rect width="16" height="28" rx="3" fill="#f43f5e" /><rect x="2" y="20" width="12" height="6" rx="1" fill="#be123c" /></g>
-              <g id="carE" class="vehicle" transform="translate(350, 125)"><rect width="28" height="16" rx="3" fill="#38bdf8" /><rect x="2" y="2" width="6" height="12" rx="1" fill="#0284c7" /></g>
-              <g id="carS" class="vehicle" transform="translate(214, 250)"><rect width="16" height="28" rx="3" fill="#a855f7" /><rect x="2" y="2" width="12" height="6" rx="1" fill="#7e22ce" /></g>
-              <g id="carW" class="vehicle" transform="translate(20, 155)"><rect width="28" height="16" rx="3" fill="#eab308" /><rect x="20" y="2" width="6" height="12" rx="1" fill="#a16207" /></g>
+              <!-- Vehicles (one SVG car per queued thread, created by the simulation engine) -->
+              <g id="vehicleLayer"></g>
             </svg>
 
             <div class="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-800 text-slate-300">
@@ -480,7 +481,7 @@
           <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3 font-mono">
             <div class="flex items-center justify-between">
               <h2 class="text-xs font-black text-slate-400 uppercase tracking-widest font-sans">Kernel Decision Terminal Logs</h2>
-              <button onclick="toggleLogs()" class="text-[10px] text-teal-400 font-bold hover:underline">Show Verbose Logs</button>
+              <button id="verboseBtn" onclick="toggleLogs()" class="text-[10px] text-teal-400 font-bold hover:underline">Show Verbose Logs</button>
             </div>
             
             <div class="space-y-2">
@@ -606,93 +607,379 @@
       if (targetTab) targetTab.classList.add('active-tab');
     }
 
-    // Interactive State Variables
-    let simRunning = false;
-    let simInterval = null;
-    let clock = 0;
-    let currentIdx = 0;
-    let agingActive = true;
-    let verboseLogs = false;
+    // =====================================================================
+    //  TrafficOS scheduling engine
+    //  lane = process queue | vehicle = thread (unit of CPU work)
+    //  green light = CPU     | quantum = green slice | all-red gap = context switch
+    // =====================================================================
+    const DIRS = ['NORTH', 'EAST', 'SOUTH', 'WEST'];
+    const CAR_SPEED = 90;     // SVG units per second
+    const HEADWAY = 1;        // seconds of green each vehicle needs (service time)
+    const CLEARANCE = 1.5;    // yellow / all-red gap between lanes (context-switch cost)
+    const AGING_STEP = 4;     // a waiting thread gains one priority level every N seconds
+    const STARVE_LIMIT = 12;  // waiting longer than this (s) counts as starving
+    const MAX_BUF = 6;        // buffer capacity per lane
+    const SLOT_GAP = 32;      // spacing of queued cars
 
-    let metrics = {
-      wait: 0.0,
-      tat: 0.0,
-      tp: 0.0,
-      cpu: 100,
-      cs: 0,
-      starving: 0
+    // SVG canvas is 400x300. axis = direction of travel, dir = +1/-1, stop = stop-line
+    // position, spawn = off-screen entry point, end = off-screen exit point.
+    const LANE = {
+      NORTH: { axis: 'y', dir:  1, fixed: 170, stop: 77,  spawn: -40, end: 310, w: 16, h: 28 },
+      SOUTH: { axis: 'y', dir: -1, fixed: 214, stop: 195, spawn: 330, end: -40, w: 16, h: 28 },
+      EAST:  { axis: 'x', dir: -1, fixed: 125, stop: 245, spawn: 430, end: -40, w: 28, h: 16 },
+      WEST:  { axis: 'x', dir:  1, fixed: 155, stop: 127, spawn: -40, end: 410, w: 28, h: 16 }
     };
 
-    let buffers = { NORTH: 2, EAST: 2, SOUTH: 2, WEST: 2 };
+    const CAR_COLORS = {
+      NORTH: ['#f43f5e', '#be123c'], EAST: ['#38bdf8', '#0284c7'],
+      SOUTH: ['#a855f7', '#7e22ce'], WEST: ['#eab308', '#a16207']
+    };
 
-    function toggleSim() {
-      simRunning = !simRunning;
-      const simBtn = document.getElementById('simBtn');
-      const badge = document.getElementById('stateBadge');
+    const ALGO_NAMES = {
+      FCFS: 'First-Come, First-Served (FCFS)',
+      SJF: 'Shortest Job First (SJF)',
+      RR: 'Round Robin (RR)',
+      PRIORITY_AGING: 'Priority + Dynamic Aging'
+    };
 
-      if (simRunning) {
-        simBtn.innerHTML = `
-          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z"/></svg>
-          PAUSE SIMULATION
-        `;
-        simBtn.className = "btn-motion bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm px-6 py-2.5 rounded-xl shadow-lg flex items-center gap-2";
-        badge.textContent = "RUNNING";
-        badge.className = "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-black text-xs px-3 py-1 rounded-md";
+    const ALGO_DESC = {
+      FCFS: 'Lanes get the green signal in arrival order and each lane runs until its queue is empty (non-preemptive).',
+      SJF: 'The lane with the fewest waiting vehicles (shortest burst) goes first and runs until empty (non-preemptive).',
+      RR: 'Every lane gets one time quantum of green in circular order, then the next lane gets its turn (preemptive).',
+      PRIORITY_AGING: 'The lane holding the best-priority thread (P1 = highest) goes first. With aging, waiting threads gain a priority level every ' + AGING_STEP + 's so none starves.'
+    };
 
-        const speed = parseInt(document.getElementById('speedSelect').value);
-        simInterval = setInterval(stepTick, speed);
-      } else {
-        simBtn.innerHTML = `
-          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/></svg>
-          START SIMULATION
-        `;
-        simBtn.className = "btn-motion bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-sm px-6 py-2.5 rounded-xl shadow-lg flex items-center gap-2";
-        badge.textContent = "PAUSED";
-        badge.className = "bg-amber-500/20 text-amber-300 border border-amber-500/30 font-black text-xs px-3 py-1 rounded-md";
-        clearInterval(simInterval);
+    const SCENARIOS = {
+      '1': {
+        algo: 'RR', quantum: 3, aging: true,
+        counts: { NORTH: 3, EAST: 3, SOUTH: 3, WEST: 3 }, prios: {}, arrivals: {},
+        desc: 'Demonstrates uniform CPU time-sharing across active process queues without starvation.'
+      },
+      '2': {
+        algo: 'RR', quantum: 3, aging: true,
+        counts: { NORTH: 6, EAST: 2, SOUTH: 2, WEST: 2 }, prios: {},
+        arrivals: { NORTH: 1, EAST: 6, SOUTH: 6, WEST: 6 },
+        desc: 'Simulates a queue bottleneck where heavy arrival rates in the North lane require slice adaptation. NORTH receives a new thread every second, so its buffer stays full while the lightly loaded lanes drain.'
+      },
+      '3': {
+        algo: 'PRIORITY_AGING', quantum: 3, aging: true,
+        counts: { NORTH: 3, EAST: 3, SOUTH: 3, WEST: 3 }, prios: {}, arrivals: {},
+        desc: 'Injects high-priority P1 emergency interrupts that force immediate context preemption. Start the simulation, then press "+ Inject Emergency".'
+      },
+      '4': {
+        algo: 'PRIORITY_AGING', quantum: 3, aging: false,
+        counts: { NORTH: 3, EAST: 2, SOUTH: 3, WEST: 3 },
+        prios: { NORTH: 2, SOUTH: 2, EAST: 3, WEST: 5 }, arrivals: { NORTH: 0.9, SOUTH: 0.9 },
+        desc: 'Demonstrates aging mechanisms preventing indefinite blocking (starvation) for low-priority P5 threads. Aging starts OFF: watch WEST starve, then switch Dynamic Aging ON.'
       }
+    };
+
+    // ---------------- state ----------------
+    let sim = null;
+    let simRunning = false;
+    let rafId = 0, lastFrame = 0, lastPanel = 0;
+    let agingActive = true;
+    let verboseLogs = false;
+    let currentScenario = '1';
+    let scenarioCfg = SCENARIOS['1'];
+    const carNodes = new Map();
+
+    const getAlgo = () => document.getElementById('algoSelect').value;
+    const getQuantum = () => parseInt(document.getElementById('quantumSelect').value, 10);
+    const speedMult = () => 1000 / parseInt(document.getElementById('speedSelect').value, 10);
+
+    // ---------------- logging ----------------
+    function resetLog() {
+      const trail = document.getElementById('logTrail');
+      trail.innerHTML = '<li>No dispatch events logged yet. Start simulation clock.</li>';
+      trail.dataset.empty = '1';
     }
 
-    function stepTick() {
-      clock++;
-      document.getElementById('clockDisplay').textContent = `Sim Clock: ${clock}s`;
-
-      // Cycle circular queue index
-      currentIdx = (currentIdx + 1) % 4;
-      updateCQHighlight();
-
-      // Update metrics
-      metrics.cs++;
-      metrics.wait = (Math.random() * 2 + 0.5).toFixed(1);
-      metrics.tat = (parseFloat(metrics.wait) + 3.0).toFixed(1);
-      metrics.tp = (clock * 1.2).toFixed(1);
-
-      document.getElementById('metricWait').textContent = `${metrics.wait}s`;
-      document.getElementById('metricTAT').textContent = `${metrics.tat}s`;
-      document.getElementById('metricTP').textContent = `${metrics.tp} p/m`;
-      document.getElementById('metricCS').textContent = metrics.cs;
-
-      // Log event
-      const directions = ["NORTH", "EAST", "SOUTH", "WEST"];
-      const dir = directions[currentIdx];
+    function log(msg, cls, verboseOnly) {
+      if (verboseOnly && !verboseLogs) return;
       const trail = document.getElementById('logTrail');
+      if (trail.dataset.empty === '1') { trail.innerHTML = ''; trail.dataset.empty = '0'; }
       const li = document.createElement('li');
-      li.textContent = `[T+${clock}s] Context switch -> Dispatched quantum slice to ${dir} lane queue.`;
+      if (cls) li.className = cls;
+      li.textContent = `[T+${Math.floor(sim.clock)}s] ${msg}`;
       trail.prepend(li);
-      if (trail.children.length > 4) trail.removeChild(trail.lastChild);
+      const limit = verboseLogs ? 14 : 4;
+      while (trail.children.length > limit) trail.removeChild(trail.lastChild);
+    }
 
-      // Animate signal lights
-      const lights = { NORTH: 'lightN', EAST: 'lightE', SOUTH: 'lightS', WEST: 'lightW' };
-      Object.keys(lights).forEach(d => {
-        document.getElementById(lights[d]).setAttribute('fill', d === dir ? '#22c55e' : '#ef4444');
+    // ---------------- engine ----------------
+    function newSim(cfg) {
+      sim = {
+        clock: 0, cars: [], nextId: 1, nextSeq: 1, minSeq: 0,
+        active: null, sliceElapsed: 0, releaseTimer: 0, clearance: 0,
+        lastLane: null, rrPtr: -1,
+        contextSwitches: 0, served: 0, waitSum: 0, tatSum: 0, busy: 0,
+        started: false, finished: false,
+        arrAcc: { NORTH: 0, EAST: 0, SOUTH: 0, WEST: 0 },
+        arrivals: Object.assign({}, cfg.arrivals || {}),
+        prios: Object.assign({}, cfg.prios || {})
+      };
+      DIRS.forEach(d => {
+        const n = Math.min(MAX_BUF, (cfg.counts && cfg.counts[d]) || 0);
+        for (let k = 0; k < n; k++) spawnThread(d, { atSlot: true });
       });
     }
 
-    function updateCQHighlight() {
+    const slotPos = (lane, k) => LANE[lane].stop - LANE[lane].dir * k * SLOT_GAP;
+    const queueOf = lane => sim.cars.filter(c => c.lane === lane && !c.released).sort((a, b) => a.seq - b.seq);
+    const queueLen = lane => { let n = 0; for (const c of sim.cars) if (c.lane === lane && !c.released) n++; return n; };
+
+    function effPrio(c, aging) {
+      if (c.emergency) return 1;
+      if (!aging) return c.prio;
+      return Math.max(Math.min(c.prio, 2), c.prio - Math.floor((sim.clock - c.arrival) / AGING_STEP)); // aging never promotes above P2 (P1 is reserved for emergencies)
+    }
+
+    function spawnThread(lane, opts) {
+      opts = opts || {};
+      if (queueLen(lane) >= MAX_BUF) return null;
+      const emergency = !!opts.emergency;
+      const id = sim.nextId++;
+      const k = emergency ? 0 : queueLen(lane);
+      const car = {
+        id, name: `${lane[0]}-${100 + id}`, lane, emergency,
+        prio: emergency ? 1 : (sim.prios[lane] || (2 + Math.floor(Math.random() * 4))),
+        seq: emergency ? --sim.minSeq : sim.nextSeq++,   // emergency jumps to the front of its lane
+        released: false, arrival: sim.clock, releasedAt: null,
+        pos: (opts.atSlot || emergency) ? slotPos(lane, k) : LANE[lane].spawn
+      };
+      sim.cars.push(car);
+      return car;
+    }
+
+    function cmpKey(a, b) {
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
+      return 0;
+    }
+
+    // The scheduler: which lane gets the next green? (null = nothing is waiting)
+    function pickLane(algo, aging) {
+      const cands = DIRS.filter(d => queueLen(d) > 0);
+      if (!cands.length) return null;
+
+      if (algo === 'FCFS') {
+        return cands.reduce((b, d) => queueOf(d)[0].seq < queueOf(b)[0].seq ? d : b);
+      }
+      if (algo === 'SJF') {
+        return cands.reduce((b, d) => queueLen(d) < queueLen(b) ? d : b);
+      }
+      if (algo === 'RR') {
+        for (let i = 1; i <= DIRS.length; i++) {
+          const d = DIRS[(sim.rrPtr + i + DIRS.length) % DIRS.length];
+          if (cands.includes(d)) return d;
+        }
+        return cands[0];
+      }
+      // PRIORITY_AGING: lane holding the best (priority, arrival) thread wins
+      const laneKey = d => {
+        let best = null;
+        for (const c of queueOf(d)) {
+          const k = [effPrio(c, aging), c.arrival, c.seq];
+          if (!best || cmpKey(k, best) < 0) best = k;
+        }
+        return best;
+      };
+      return cands.reduce((b, d) => cmpKey(laneKey(d), laneKey(b)) < 0 ? d : b);
+    }
+
+    function startSlice(lane, algo, quantum) {
+      const preemptive = algo === 'RR' || algo === 'PRIORITY_AGING';
+      if (sim.lastLane !== lane) {
+        if (sim.lastLane) {
+          sim.contextSwitches++;
+          log(`Context switch -> Dispatched ${preemptive ? 'quantum slice (q=' + quantum + 's)' : 'run-to-completion burst'} to ${lane} lane queue.`);
+        } else {
+          log(`Initial dispatch -> Granted green signal to ${lane} lane queue.`);
+        }
+      } else {
+        log(`${lane} keeps the CPU (no other lane preferred).`, '', true);
+      }
+      sim.lastLane = lane;
+      sim.active = lane;
+      sim.sliceElapsed = 0;
+      sim.releaseTimer = HEADWAY;           // first vehicle is released immediately
+      sim.rrPtr = DIRS.indexOf(lane);
+    }
+
+    function tick(h, algo, quantum, aging) {
+      if (sim.finished) return;
+      sim.started = true;
+      sim.clock += h;
+
+      // 0) scenario arrivals (continuous traffic)
+      for (const d of DIRS) {
+        const every = sim.arrivals[d];
+        if (every > 0) {
+          sim.arrAcc[d] += h;
+          while (sim.arrAcc[d] >= every) { sim.arrAcc[d] -= every; spawnThread(d); }
+        }
+      }
+
+      // 1) yellow / all-red gap, then dispatch
+      if (sim.active === null) {
+        if (sim.clearance > 0) sim.clearance -= h;
+        if (sim.clearance <= 0) {
+          sim.clearance = 0;
+          const lane = pickLane(algo, aging);
+          if (lane) startSlice(lane, algo, quantum);
+        }
+      }
+
+      // 2) run the green slice
+      if (sim.active) {
+        const lane = sim.active;
+        sim.busy += h;
+        sim.sliceElapsed += h;
+        sim.releaseTimer = Math.min(sim.releaseTimer + h, HEADWAY);   // one vehicle per HEADWAY, no "banked" releases
+
+        const preemptive = algo === 'RR' || algo === 'PRIORITY_AGING';
+        const expired = preemptive && sim.sliceElapsed >= quantum - 1e-9;
+
+        if (!expired) {
+          while (sim.releaseTimer >= HEADWAY - 1e-9 && queueLen(lane) > 0) {
+            const head = queueOf(lane)[0];
+            if (Math.abs(head.pos - LANE[lane].stop) > 1) break;   // still driving up to the stop line: slice waits for it
+            head.released = true;
+            head.releasedAt = sim.clock;
+            sim.releaseTimer -= HEADWAY;
+            log(`Released ${head.name} (P${head.prio}${head.emergency ? ' EMERGENCY' : ''}) into the intersection.`, '', true);
+          }
+        }
+
+        // a lane is only "done" once its last vehicle has had its full service time
+        const empty = queueLen(lane) === 0 && sim.releaseTimer >= HEADWAY - 1e-9;
+        if (expired || empty) {
+          sim.active = null;
+          const next = pickLane(algo, aging);
+          if (next === lane && !empty) startSlice(lane, algo, quantum);   // same lane continues
+          else sim.clearance = CLEARANCE;                                 // yellow gap before next lane
+        }
+      }
+
+      // 3) move the vehicles
+      for (const lane of DIRS) {
+        queueOf(lane).forEach((c, k) => {
+          const target = slotPos(lane, k);
+          const d = target - c.pos, stepLen = CAR_SPEED * h;
+          c.pos = Math.abs(d) <= stepLen ? target : c.pos + Math.sign(d) * stepLen;
+        });
+      }
+      const remaining = [];
+      for (const c of sim.cars) {
+        if (c.released) {
+          const L = LANE[c.lane];
+          c.pos += L.dir * CAR_SPEED * h;
+          if (L.dir > 0 ? c.pos >= L.end : c.pos <= L.end) {
+            sim.served++;
+            sim.waitSum += c.releasedAt - c.arrival;
+            sim.tatSum += sim.clock - c.arrival;
+            log(`${c.name} exited (wait ${(c.releasedAt - c.arrival).toFixed(1)}s, turnaround ${(sim.clock - c.arrival).toFixed(1)}s).`, '', true);
+            continue;
+          }
+        }
+        remaining.push(c);
+      }
+      sim.cars = remaining;
+
+      // 4) finished?
+      const hasArrivals = DIRS.some(d => sim.arrivals[d] > 0);
+      if (!hasArrivals && sim.cars.length === 0 && sim.active === null) {
+        sim.finished = true;
+        sim.clearance = 0;
+      }
+    }
+
+    function stepSim(dt) {
+      const algo = getAlgo(), q = getQuantum(), aging = agingActive;
+      let left = dt;
+      while (left > 1e-9 && !sim.finished) {
+        const h = Math.min(0.05, left);
+        tick(h, algo, q, aging);
+        left -= h;
+      }
+    }
+
+    // ---------------- rendering ----------------
+    function makeCarNode(c) {
+      const NS = 'http://www.w3.org/2000/svg';
+      const L = LANE[c.lane];
+      const [body, detail] = c.emergency ? ['#f8fafc', '#ef4444'] : CAR_COLORS[c.lane];
+      const g = document.createElementNS(NS, 'g');
+      g.setAttribute('class', 'vehicle' + (c.emergency ? ' ambulance' : ''));
+      const mk = (attrs) => {
+        const r = document.createElementNS(NS, 'rect');
+        Object.keys(attrs).forEach(k => r.setAttribute(k, attrs[k]));
+        g.appendChild(r);
+      };
+      mk({ width: L.w, height: L.h, rx: 3, fill: body });
+      if (c.lane === 'NORTH')      mk({ x: 2, y: 20, width: 12, height: 6, rx: 1, fill: detail });
+      else if (c.lane === 'SOUTH') mk({ x: 2, y: 2,  width: 12, height: 6, rx: 1, fill: detail });
+      else if (c.lane === 'EAST')  mk({ x: 2, y: 2,  width: 6,  height: 12, rx: 1, fill: detail });
+      else                         mk({ x: 20, y: 2, width: 6,  height: 12, rx: 1, fill: detail });
+      return g;
+    }
+
+    function renderCars() {
+      const layer = document.getElementById('vehicleLayer');
+      const seen = new Set();
+      for (const c of sim.cars) {
+        let node = carNodes.get(c.id);
+        if (!node) { node = makeCarNode(c); layer.appendChild(node); carNodes.set(c.id, node); }
+        const L = LANE[c.lane];
+        const x = L.axis === 'x' ? c.pos : L.fixed;
+        const y = L.axis === 'y' ? c.pos : L.fixed;
+        node.setAttribute('transform', `translate(${x.toFixed(1)}, ${y.toFixed(1)})`);
+        seen.add(c.id);
+      }
+      for (const [id, node] of carNodes) {
+        if (!seen.has(id)) { node.remove(); carNodes.delete(id); }
+      }
+    }
+
+    function renderLights() {
+      const ids = { NORTH: 'lightN', EAST: 'lightE', SOUTH: 'lightS', WEST: 'lightW' };
+      DIRS.forEach(d => {
+        let fill = '#ef4444';                                                        // red
+        if (sim.active === d) fill = '#22c55e';                                      // green
+        else if (sim.active === null && sim.clearance > 0 && sim.lastLane === d) fill = '#f59e0b'; // yellow
+        document.getElementById(ids[d]).setAttribute('fill', fill);
+      });
+    }
+
+    function renderHeap() {
+      const grid = document.getElementById('minHeapGrid');
+      const aging = agingActive && getAlgo() === 'PRIORITY_AGING';
+      const waiting = sim.cars.filter(c => !c.released).map(c => ({ c, p: effPrio(c, aging) }));
+      waiting.sort((a, b) => a.p - b.p || a.c.arrival - b.c.arrival || a.c.seq - b.c.seq);
+      const shown = waiting.slice(0, 8);
+      if (!shown.length) {
+        grid.innerHTML = '<div class="col-span-full text-xs text-slate-500 font-semibold p-2">No threads waiting in the ready queue.</div>';
+        return;
+      }
+      grid.innerHTML = shown.map((w, i) => {
+        const c = w.c;
+        const colour = c.emergency ? 'text-rose-400' : (w.p <= 3 ? 'text-teal-400' : (w.p === 4 ? 'text-slate-300' : 'text-rose-400'));
+        const aged = (!c.emergency && w.p < c.prio) ? ` ↑ aged from ${c.prio}` : '';
+        const label = c.emergency ? 'P1 EMERGENCY' : `Priority ${w.p}${aged}`;
+        return `<div class="bg-slate-800/60 border ${c.emergency ? 'border-rose-500/60' : 'border-slate-700'} p-2.5 rounded-lg flex items-center justify-between"><div><span class="text-[10px] font-bold text-slate-400 block">[${i}] ${c.name} (${c.lane})</span><span class="text-xs font-black ${colour}">${label}</span></div></div>`;
+      }).join('');
+    }
+
+    function renderPanels() {
+      // clock
+      document.getElementById('clockDisplay').textContent = `Sim Clock: ${Math.floor(sim.clock)}s`;
+
+      // circular queue highlight
+      const activeIdx = sim.active ? DIRS.indexOf(sim.active) : -1;
       for (let i = 0; i < 4; i++) {
         const el = document.getElementById(`cq-${i}`);
         const badge = document.getElementById(`cq-badge-${i}`);
-        if (i === currentIdx) {
+        if (i === activeIdx) {
           el.className = "bg-slate-800/80 border-2 border-teal-500/80 p-3 rounded-xl text-center";
           badge.classList.remove('hidden');
         } else {
@@ -700,53 +987,151 @@
           badge.classList.add('hidden');
         }
       }
+
+      // buffers
+      const bufIds = { NORTH: 'bufN', EAST: 'bufE', SOUTH: 'bufS', WEST: 'bufW' };
+      DIRS.forEach(d => { document.getElementById(bufIds[d]).textContent = `${queueLen(d)} / ${MAX_BUF}`; });
+
+      renderHeap();
+
+      // metrics
+      const served = sim.served;
+      document.getElementById('metricWait').textContent = `${(served ? sim.waitSum / served : 0).toFixed(1)}s`;
+      document.getElementById('metricTAT').textContent = `${(served ? sim.tatSum / served : 0).toFixed(1)}s`;
+      document.getElementById('metricTP').textContent = `${(sim.clock > 0 ? served / sim.clock * 60 : 0).toFixed(1)} p/m`;
+      document.getElementById('metricCPU').textContent = `${Math.round(sim.clock > 0 ? sim.busy / sim.clock * 100 : 100)}%`;
+      document.getElementById('metricCS').textContent = sim.contextSwitches;
+      const starving = sim.cars.filter(c => !c.released && !c.emergency && sim.clock - c.arrival > STARVE_LIMIT).length;
+      document.getElementById('metricStarve').textContent = starving;
+
+      // mutex semaphore: held (S=0) while a lane owns the intersection
+      const mutex = document.getElementById('mutexBadge');
+      if (sim.active) {
+        mutex.textContent = `Mutex S = 0 (LOCKED by ${sim.active})`;
+        mutex.className = "bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-black px-2.5 py-1 rounded";
+      } else {
+        mutex.textContent = "Mutex S = 1 (UNLOCKED)";
+        mutex.className = "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-black px-2.5 py-1 rounded";
+      }
+    }
+
+    function getPhase() {
+      return sim.finished ? 'COMPLETED' : simRunning ? 'RUNNING' : sim.started ? 'PAUSED' : 'IDLE';
+    }
+
+    function setPhaseUI() {
+      const phase = getPhase();
+      const btn = document.getElementById('simBtn');
+      const badge = document.getElementById('stateBadge');
+      const playIcon = '<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/></svg>';
+      const pauseIcon = '<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z"/></svg>';
+      const label = { IDLE: 'START SIMULATION', RUNNING: 'PAUSE SIMULATION', PAUSED: 'RESUME SIMULATION', COMPLETED: 'RESTART SIMULATION' }[phase];
+
+      btn.innerHTML = `${phase === 'RUNNING' ? pauseIcon : playIcon} ${label}`;
+      btn.className = phase === 'RUNNING'
+        ? "btn-motion bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm px-6 py-2.5 rounded-xl shadow-lg flex items-center gap-2"
+        : "btn-motion bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-sm px-6 py-2.5 rounded-xl shadow-lg flex items-center gap-2";
+
+      badge.textContent = phase;
+      badge.className = phase === 'RUNNING'
+        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-black text-xs px-3 py-1 rounded-md"
+        : phase === 'COMPLETED'
+          ? "bg-teal-500/20 text-teal-300 border border-teal-500/30 font-black text-xs px-3 py-1 rounded-md"
+          : "bg-amber-500/20 text-amber-300 border border-amber-500/30 font-black text-xs px-3 py-1 rounded-md";
+    }
+
+    function renderAll() {
+      renderCars();
+      renderLights();
+      renderPanels();
+      setPhaseUI();
+    }
+
+    // ---------------- animation loop ----------------
+    function frame(now) {
+      if (!simRunning) return;
+      const dt = Math.min((now - lastFrame) / 1000, 0.1) * speedMult();   // clamp after tab switches
+      lastFrame = now;
+      stepSim(dt);
+      renderCars();
+      renderLights();
+      if (now - lastPanel > 150 || sim.finished) { renderPanels(); lastPanel = now; }
+      if (sim.finished) {
+        simRunning = false;
+        renderAll();
+        return;
+      }
+      rafId = requestAnimationFrame(frame);
+    }
+
+    // ---------------- controls (called from the page buttons) ----------------
+    function resetSim() {
+      simRunning = false;
+      cancelAnimationFrame(rafId);
+      newSim(scenarioCfg);
+      carNodes.forEach(n => n.remove());
+      carNodes.clear();
+      resetLog();
+      renderAll();
+    }
+
+    function toggleSim() {
+      if (simRunning) {                       // pause
+        simRunning = false;
+        cancelAnimationFrame(rafId);
+        renderAll();
+        return;
+      }
+      if (sim.finished) resetSim();           // restart the current scenario
+      simRunning = true;
+      lastFrame = performance.now();
+      lastPanel = 0;
+      setPhaseUI();
+      rafId = requestAnimationFrame(frame);
+    }
+
+    // STEP TICK: advance the simulation by exactly one second
+    function stepTick() {
+      if (simRunning || sim.finished) return;
+      stepSim(1);
+      renderAll();
     }
 
     function selectScenario(scen) {
       document.querySelectorAll('[id^="scen-"]').forEach(b => {
         b.className = "w-full text-left p-3 rounded-lg border border-slate-800 bg-slate-800/40 hover:bg-slate-800/80 transition-all flex items-center justify-between";
       });
-
       const btn = document.getElementById(`scen-${scen}`);
       btn.className = "w-full text-left p-3 rounded-lg border border-teal-500/50 bg-teal-500/10 hover:bg-teal-500/20 transition-all flex items-center justify-between";
 
-      const desc = document.getElementById('phaseDesc');
-      const algoSelect = document.getElementById('algoSelect');
-
-      if (scen === '1') {
-        algoSelect.value = "RR";
-        desc.textContent = "Demonstrates uniform CPU time-sharing across active process queues without starvation.";
-      } else if (scen === '2') {
-        algoSelect.value = "RR";
-        desc.textContent = "Simulates a queue bottleneck where heavy arrival rates in the North lane require slice adaptation.";
-      } else if (scen === '3') {
-        algoSelect.value = "PRIORITY_AGING";
-        desc.textContent = "Injects high-priority P1 emergency interrupts that force immediate context preemption.";
-      } else if (scen === '4') {
-        algoSelect.value = "PRIORITY_AGING";
-        desc.textContent = "Demonstrates aging mechanisms preventing indefinite blocking (starvation) for low-priority P5 threads.";
-      }
+      const S = SCENARIOS[scen];
+      currentScenario = scen;
+      scenarioCfg = S;
+      document.getElementById('algoSelect').value = S.algo;
+      document.getElementById('quantumSelect').value = String(S.quantum);
+      setAging(S.aging);
       updateAlgo();
+      document.getElementById('phaseDesc').textContent = S.desc;   // scenario text wins over the generic one
+      resetSim();
     }
 
     function updateAlgo() {
-      const val = document.getElementById('algoSelect').value;
-      const display = document.getElementById('modeDisplay');
-      const map = {
-        'FCFS': 'First-Come, First-Served (FCFS)',
-        'SJF': 'Shortest Job First (SJF)',
-        'RR': 'Round Robin (RR)',
-        'PRIORITY_AGING': 'Priority + Dynamic Aging'
-      };
-      display.textContent = map[val];
+      const val = getAlgo();
+      document.getElementById('modeDisplay').textContent = ALGO_NAMES[val];
+      document.getElementById('phaseDesc').textContent = ALGO_DESC[val];
+      // time quantum only matters for the preemptive algorithms
+      const q = document.getElementById('quantumSelect');
+      const preemptive = val === 'RR' || val === 'PRIORITY_AGING';
+      q.disabled = !preemptive;
+      q.classList.toggle('opacity-40', !preemptive);
+      if (sim) renderAll();
     }
 
-    function toggleAging() {
-      agingActive = !agingActive;
+    function setAging(on) {
+      agingActive = on;
       const toggle = document.getElementById('agingToggle');
       const tag = document.getElementById('agingStatusTag');
-
-      if (agingActive) {
+      if (on) {
         toggle.textContent = "ACTIVE";
         toggle.className = "w-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-black text-xs py-2 rounded-lg";
         tag.textContent = "Aging Enabled";
@@ -759,28 +1144,50 @@
       }
     }
 
+    function toggleAging() {
+      setAging(!agingActive);
+      log(`Dynamic aging ${agingActive ? 'ENABLED: waiting threads now gain priority over time.' : 'DISABLED: low-priority threads can starve.'}`);
+      if (sim) renderAll();
+    }
+
     function addThread(dir) {
-      if (buffers[dir] < 6) {
-        buffers[dir]++;
-        const map = { NORTH: 'bufN', EAST: 'bufE', SOUTH: 'bufS', WEST: 'bufW' };
-        document.getElementById(map[dir]).textContent = `${buffers[dir]} / 6`;
-      }
+      const car = spawnThread(dir);
+      if (!car) { log(`${dir} buffer full (${MAX_BUF}/${MAX_BUF}): thread rejected.`, 'text-amber-400'); return; }
+      sim.finished = false;
+      log(`Enqueued thread ${car.name} (P${car.prio}) on ${dir} lane.`, '', true);
+      renderAll();
     }
 
     function injectEmergency() {
-      const trail = document.getElementById('logTrail');
-      const li = document.createElement('li');
-      li.className = "text-rose-400 font-bold";
-      li.textContent = `[T+${clock}s] INTERRUPT: P1 Emergency Ambulance injected! Preempting active quantum slice.`;
-      trail.prepend(li);
-      metrics.cs += 2;
-      document.getElementById('metricCS').textContent = metrics.cs;
+      const open = DIRS.filter(d => queueLen(d) < MAX_BUF);
+      if (!open.length) { log('Emergency dropped: every lane buffer is full.', 'text-amber-400'); return; }
+      const pool = sim.active ? open.filter(d => d !== sim.active) : open;
+      const choices = pool.length ? pool : open;
+      const lane = choices[Math.floor(Math.random() * choices.length)];
+      const car = spawnThread(lane, { emergency: true });
+      sim.finished = false;
+
+      if (getAlgo() === 'PRIORITY_AGING') {
+        log(`INTERRUPT: P1 Emergency Ambulance ${car.name} on ${lane}! Preempting the active quantum slice.`, 'text-rose-400 font-bold');
+        if (sim.active && sim.active !== lane) {   // hardware interrupt: stop the current slice now
+          sim.active = null;
+          sim.clearance = CLEARANCE;
+        }
+      } else {
+        log(`INTERRUPT: Emergency ${car.name} on ${lane} moved to the front of its lane. ${ALGO_NAMES[getAlgo()]} is not priority-preemptive: switch to Priority + Dynamic Aging to see preemption.`, 'text-rose-400 font-bold');
+      }
+      renderAll();
     }
 
     function toggleLogs() {
       verboseLogs = !verboseLogs;
-      alert(verboseLogs ? "Verbose log trace enabled." : "Standard logging active.");
+      document.getElementById('verboseBtn').textContent = verboseLogs ? 'Hide Verbose Logs' : 'Show Verbose Logs';
+      log(verboseLogs ? 'Verbose log trace enabled (vehicle release / exit events).' : 'Standard logging active.');
     }
+
+    // ---------------- boot ----------------
+    selectScenario('1');
+
   </script>
 </body>
 </html>
