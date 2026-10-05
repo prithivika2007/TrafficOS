@@ -17,8 +17,8 @@ export const SLOT_GAP: Record<Direction, number> = { NORTH: 5.5, SOUTH: 5.5, EAS
 export const CAR_SPEED = 35; // % of canvas per second
 export const HEADWAY = 1; // seconds between vehicles released on green (service time per vehicle)
 export const CLEARANCE = 1; // seconds of all-red between lanes (context-switch cost)
-export const AGING_STEP = 4; // a waiting lane gains one priority level every N seconds
-export const MAX_PER_LANE = 6;
+export const AGING_STEP = 2; // a waiting lane gains one priority level every N seconds
+export const MAX_PER_LANE = 7;
 
 export interface Car {
   id: number;
@@ -26,6 +26,8 @@ export interface Car {
   progress: number;
   released: boolean;
   arrival: number;
+  arrivalTime: number;
+  arrivalIndex: number;
   releasedAt: number | null;
 }
 
@@ -45,6 +47,10 @@ export interface Sim {
   clock: number;
   cars: Car[];
   nextId: number;
+  arrivalIndex: number;
+  fcfsSchedule: Direction[];
+  fcfsScheduleIndex: number;
+  nextFCFSArrival: number;
   active: Direction | null;
   sliceElapsed: number;
   releaseTimer: number;
@@ -62,14 +68,82 @@ export interface Sim {
   finished: boolean;
 }
 
-export const defaultSetup = (): Setup => ({
-  NORTH: { count: 4, priority: 2 },
-  EAST: { count: 4, priority: 3 },
-  SOUTH: { count: 4, priority: 1 },
-  WEST: { count: 4, priority: 4 },
-});
+export const presetSetup = (algo: Algo): Setup => {
+  const priorities: Record<Direction, number> =
+    algo === "PRIORITY_AGING"
+      ? { NORTH: 4, EAST: 1, SOUTH: 3, WEST: 2 }
+      : { NORTH: 2, EAST: 2, SOUTH: 2, WEST: 2 };
+
+  const counts: Record<Direction, number> = {
+    NORTH: 4,
+    EAST: 4,
+    SOUTH: 4,
+    WEST: 4,
+  };
+
+  switch (algo) {
+    case "FCFS":
+      counts.NORTH = 2;
+      counts.EAST = 6;
+      counts.SOUTH = 3;
+      counts.WEST = 5;
+      break;
+    case "SJF":
+      counts.NORTH = 7;
+      counts.EAST = 2;
+      counts.SOUTH = 5;
+      counts.WEST = 3;
+      break;
+    case "RR":
+      counts.NORTH = 5;
+      counts.EAST = 3;
+      counts.SOUTH = 6;
+      counts.WEST = 4;
+      break;
+    case "PRIORITY_AGING":
+      counts.NORTH = 4;
+      counts.EAST = 6;
+      counts.SOUTH = 3;
+      counts.WEST = 5;
+      break;
+  }
+
+  return {
+    NORTH: { count: counts.NORTH, priority: priorities.NORTH },
+    EAST: { count: counts.EAST, priority: priorities.EAST },
+    SOUTH: { count: counts.SOUTH, priority: priorities.SOUTH },
+    WEST: { count: counts.WEST, priority: priorities.WEST },
+  };
+};
+
+export const defaultSetup = (): Setup => presetSetup("RR");
 
 const slotPos = (lane: Direction, k: number) => STOP_LINE[lane] - k * SLOT_GAP[lane];
+const FCFS_ARRIVAL_ORDER: Direction[] = [
+  "EAST", "NORTH", "EAST", "WEST", "SOUTH", "EAST", "WEST", "EAST",
+  "SOUTH", "WEST", "NORTH", "EAST", "WEST", "SOUTH", "WEST", "EAST",
+];
+
+function makeFCFSSchedule(setup: Setup): Direction[] {
+  const remaining = Object.fromEntries(
+    DIRECTIONS.map((lane) => [lane, Math.max(0, Math.floor(setup[lane].count))])
+  ) as Record<Direction, number>;
+  const schedule: Direction[] = [];
+
+  for (const lane of FCFS_ARRIVAL_ORDER) {
+    if (remaining[lane] > 0) {
+      schedule.push(lane);
+      remaining[lane]--;
+    }
+  }
+  while (DIRECTIONS.some((lane) => remaining[lane] > 0)) {
+    const lane = DIRECTIONS.find((candidate) => remaining[candidate] > 0);
+    if (!lane) break;
+    schedule.push(lane);
+    remaining[lane]--;
+  }
+  return schedule;
+}
 
 /** Unreleased (waiting) vehicles of a lane, front of the queue first. */
 export const queueOf = (sim: Sim, lane: Direction): Car[] =>
@@ -77,11 +151,15 @@ export const queueOf = (sim: Sim, lane: Direction): Car[] =>
 
 const queueLen = (sim: Sim, lane: Direction) => queueOf(sim, lane).length;
 
-export function createSim(setup: Setup): Sim {
+export function createSim(setup: Setup, algo?: Algo): Sim {
   const sim: Sim = {
     clock: 0,
     cars: [],
     nextId: 1,
+    arrivalIndex: 0,
+    fcfsSchedule: algo === "FCFS" ? makeFCFSSchedule(setup) : [],
+    fcfsScheduleIndex: 0,
+    nextFCFSArrival: 1,
     active: null,
     sliceElapsed: 0,
     releaseTimer: 0,
@@ -103,18 +181,23 @@ export function createSim(setup: Setup): Sim {
     started: false,
     finished: false,
   };
-  // Initial vehicles are already queued at the stop line (arrival time 0).
-  for (const lane of DIRECTIONS) {
-    const n = Math.max(0, Math.min(MAX_PER_LANE, setup[lane].count));
-    for (let k = 0; k < n; k++) {
-      sim.cars.push({
-        id: sim.nextId++,
-        lane,
-        progress: slotPos(lane, k),
-        released: false,
-        arrival: 0,
-        releasedAt: null,
-      });
+  if (algo !== "FCFS") {
+    // Initial vehicles are already queued at the stop line (arrival time 0).
+    for (const lane of DIRECTIONS) {
+      const n = Math.max(0, Math.min(MAX_PER_LANE, setup[lane].count));
+      for (let k = 0; k < n; k++) {
+        sim.arrivalIndex++;
+        sim.cars.push({
+          id: sim.nextId++,
+          lane,
+          progress: slotPos(lane, k),
+          released: false,
+          arrival: 0,
+          arrivalTime: 0,
+          arrivalIndex: sim.arrivalIndex,
+          releasedAt: null,
+        });
+      }
     }
   }
   return sim;
@@ -125,12 +208,15 @@ export function addVehicle(sim: Sim, lane: Direction): boolean {
   const k = queueLen(sim, lane);
   if (k >= MAX_PER_LANE) return false;
   if (k === 0) sim.waitSince[lane] = sim.clock; // lane just became "ready"
+  sim.arrivalIndex++;
   sim.cars.push({
     id: sim.nextId++,
     lane,
     progress: 0, // drives in from the edge to the back of the queue
     released: false,
     arrival: sim.clock,
+    arrivalTime: sim.clock,
+    arrivalIndex: sim.arrivalIndex,
     releasedAt: null,
   });
   sim.finished = false;
@@ -153,7 +239,11 @@ export function pickLane(sim: Sim, algo: Algo, aging: boolean): Direction | null
     case "FCFS": {
       // earliest-arrived waiting vehicle wins
       return cands.reduce((best, d) =>
-        queueOf(sim, d)[0].id < queueOf(sim, best)[0].id ? d : best
+        queueOf(sim, d)[0].arrivalTime < queueOf(sim, best)[0].arrivalTime ||
+        (queueOf(sim, d)[0].arrivalTime === queueOf(sim, best)[0].arrivalTime &&
+          queueOf(sim, d)[0].arrivalIndex < queueOf(sim, best)[0].arrivalIndex)
+          ? d
+          : best
       );
     }
     case "SJF": {
@@ -201,10 +291,37 @@ function endSlice(sim: Sim) {
   sim.active = null;
 }
 
+function addFCFSArrival(sim: Sim, lane: Direction) {
+  const k = queueLen(sim, lane);
+  if (k === 0) sim.waitSince[lane] = sim.clock;
+  sim.arrivalIndex++;
+  sim.cars.push({
+    id: sim.nextId++,
+    lane,
+    progress: 0,
+    released: false,
+    arrival: sim.clock,
+    arrivalTime: sim.clock,
+    arrivalIndex: sim.arrivalIndex,
+    releasedAt: null,
+  });
+}
+
 function tick(sim: Sim, h: number, algo: Algo, quantum: number, aging: boolean) {
   if (sim.finished) return;
   sim.started = true;
   sim.clock += h;
+
+  if (algo === "FCFS") {
+    while (
+      sim.fcfsScheduleIndex < sim.fcfsSchedule.length &&
+      sim.clock >= sim.nextFCFSArrival - 1e-9
+    ) {
+      addFCFSArrival(sim, sim.fcfsSchedule[sim.fcfsScheduleIndex]);
+      sim.fcfsScheduleIndex++;
+      sim.nextFCFSArrival += 1;
+    }
+  }
 
   // 1) All-red gap, then dispatch.
   if (sim.active === null) {
@@ -267,7 +384,13 @@ function tick(sim: Sim, h: number, algo: Algo, quantum: number, aging: boolean) 
   sim.cars = remaining;
 
   // 4) Done?
-  if (sim.cars.length === 0 && sim.active === null) sim.finished = true;
+  if (
+    sim.cars.length === 0 &&
+    sim.active === null &&
+    (algo !== "FCFS" || sim.fcfsScheduleIndex >= sim.fcfsSchedule.length)
+  ) {
+    sim.finished = true;
+  }
 }
 
 /** Advance the simulation by `dt` seconds (internally split into small steps). */

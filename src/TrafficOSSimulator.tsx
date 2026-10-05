@@ -10,8 +10,8 @@ import {
   Snapshot,
   addVehicle,
   createSim,
-  defaultSetup,
   effectivePriority,
+  presetSetup,
   snapshot,
   step,
 } from "./simEngine";
@@ -29,7 +29,19 @@ const LANE_DOT: Record<Direction, string> = {
   SOUTH: "bg-purple-500",
   WEST: "bg-amber-500",
 };
+const LANE_COLOR: Record<Direction, string> = {
+  NORTH: "#ef4444",
+  EAST: "#3b82f6",
+  SOUTH: "#a855f7",
+  WEST: "#f59e0b",
+};
 const LANE_SHORT: Record<Direction, string> = { NORTH: "N", EAST: "E", SOUTH: "S", WEST: "W" };
+const CAR_ROTATION: Record<Direction, number> = {
+  NORTH: 180,
+  EAST: -90,
+  SOUTH: 0,
+  WEST: 90,
+};
 
 const ALGO_LABEL: Record<Algo, string> = {
   RR: "Round Robin (RR)",
@@ -53,17 +65,19 @@ type Phase = "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED";
 export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
   initialAlgoConfig,
 }) => {
+  const initialAlgo: Algo = isAlgo(initialAlgoConfig?.algo)
+    ? initialAlgoConfig.algo
+    : "RR";
+
   // ---- Setup (what the user configures before pressing START) -----------------
-  const [selectedAlgo, setSelectedAlgo] = useState<Algo>(
-    isAlgo(initialAlgoConfig?.algo) ? initialAlgoConfig!.algo as Algo : "RR"
-  );
+  const [selectedAlgo, setSelectedAlgo] = useState<Algo>(initialAlgo);
   const [timeQuantum, setTimeQuantum] = useState<number>(initialAlgoConfig?.quantum || 3);
   const [aging, setAging] = useState<boolean>(true);
   const [speed, setSpeed] = useState<number>(1);
-  const [setup, setSetup] = useState<Setup>(defaultSetup());
+  const [setup, setSetup] = useState<Setup>(() => presetSetup(initialAlgo));
 
   // ---- Live simulation --------------------------------------------------------
-  const simRef = useRef<Sim>(createSim(setup));
+  const simRef = useRef<Sim>(createSim(setup, selectedAlgo));
   const [snap, setSnap] = useState<Snapshot>(() => snapshot(simRef.current));
   const [running, setRunning] = useState<boolean>(false);
 
@@ -73,14 +87,20 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
 
   // Sync when App passes a new algorithm / quantum (from the Lab Manual buttons).
   useEffect(() => {
-    if (isAlgo(initialAlgoConfig?.algo)) setSelectedAlgo(initialAlgoConfig!.algo as Algo);
+    if (isAlgo(initialAlgoConfig?.algo)) {
+      const nextAlgo = initialAlgoConfig.algo;
+      if (nextAlgo !== selectedAlgo) {
+        setSelectedAlgo(nextAlgo);
+        setSetup(presetSetup(nextAlgo));
+      }
+    }
     if (initialAlgoConfig?.quantum) setTimeQuantum(initialAlgoConfig.quantum);
   }, [initialAlgoConfig]);
 
   // Before START, editing the lane setup rebuilds the scene so the queued cars appear live.
   useEffect(() => {
     if (simRef.current.started) return;
-    simRef.current = createSim(setup);
+    simRef.current = createSim(setup, selectedAlgo);
     setSnap(snapshot(simRef.current));
   }, [setup]);
 
@@ -120,7 +140,9 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
   // ---- Controls ---------------------------------------------------------------
   const reset = () => {
     setRunning(false);
-    simRef.current = createSim(setup);
+    const nextSetup = presetSetup(selectedAlgo);
+    setSetup(nextSetup);
+    simRef.current = createSim(nextSetup, selectedAlgo);
     setSnap(snapshot(simRef.current));
   };
 
@@ -128,7 +150,7 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
     if (phase === "RUNNING") {
       setRunning(false);
     } else if (phase === "COMPLETED") {
-      simRef.current = createSim(setup);
+      simRef.current = createSim(setup, selectedAlgo);
       setSnap(snapshot(simRef.current));
       setRunning(true);
     } else if (totalVehicles > 0 || simRef.current.cars.length > 0) {
@@ -164,6 +186,11 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
       case "WEST": // Drive right (+X)
         return { left: `${progress}%`, top: "52%" };
     }
+  };
+
+  const handleAlgoChange = (algo: Algo) => {
+    setSelectedAlgo(algo);
+    setSetup(presetSetup(algo));
   };
 
   const signalOf = (lane: Direction) => {
@@ -257,7 +284,7 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
             <label className="block text-xs text-ink-400 mb-1">Active Algorithm</label>
             <select
               value={selectedAlgo}
-              onChange={(e) => setSelectedAlgo(e.target.value as Algo)}
+              onChange={(e) => handleAlgoChange(e.target.value as Algo)}
               className="w-full bg-navy-950 border border-navy-700 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500"
             >
               {(Object.keys(ALGO_LABEL) as Algo[]).map((a) => (
@@ -345,7 +372,7 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
                   </select>
                   <select
                     value={setup[d].priority}
-                    disabled={locked || selectedAlgo !== "PRIORITY_AGING"}
+                    disabled={locked}
                     onChange={(e) => setLane(d, { priority: Number(e.target.value) })}
                     className={selectCls}
                   >
@@ -414,13 +441,40 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
               E: {signalOf("EAST")}
             </div>
 
-            {/* Dynamic Moving Vehicle Dots */}
+            {/* Dynamic Moving Vehicles */}
             {snap.cars.map((v) => (
               <div
                 key={v.id}
-                className={`absolute w-4 h-4 rounded-full ${LANE_DOT[v.lane]} shadow-lg transform -translate-x-1/2 -translate-y-1/2`}
-                style={getVehicleStyle(v.lane, v.progress)}
-              />
+                className={`absolute w-4 h-6 ${
+                  selectedAlgo === "FCFS" ? "transition-all duration-100" : ""
+                }`}
+                style={{
+                  ...getVehicleStyle(v.lane, v.progress),
+                  transform: "translate(-50%, -50%)",
+                }}
+              >
+                <svg
+                  viewBox="0 0 20 30"
+                  aria-hidden="true"
+                  className="w-full h-full drop-shadow-md"
+                  style={{ transform: `rotate(${CAR_ROTATION[v.lane]}deg)` }}
+                >
+                  <path
+                    d="M6 1.5h8l3 5v17l-3 5H6l-3-5v-17l3-5Z"
+                    fill={LANE_COLOR[v.lane]}
+                    stroke="#0f172a"
+                    strokeWidth="1"
+                  />
+                  <path d="M5 8h10v7H5z" fill="#dbeafe" opacity="0.9" />
+                  <path d="M5 18h10v3H5z" fill="#1e293b" opacity="0.8" />
+                  <path d="M7 3.5h6" stroke="#fff" strokeWidth="1" strokeLinecap="round" />
+                </svg>
+                {selectedAlgo === "FCFS" && !v.released && (
+                  <span className="absolute -top-1 -right-2 rounded bg-navy-950 px-0.5 text-[7px] leading-3 text-white border border-cyan-500/70">
+                    #{v.arrivalIndex}
+                  </span>
+                )}
+              </div>
             ))}
           </div>
 
