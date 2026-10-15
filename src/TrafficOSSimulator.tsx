@@ -46,19 +46,15 @@ const CAR_ROTATION: Record<Direction, number> = {
 const ALGO_LABEL: Record<Algo, string> = {
   RR: "Round Robin (RR)",
   PRIORITY_AGING: "Priority + Aging",
-  SJF: "Shortest Job First (SJF)",
-  FCFS: "First-Come First-Served",
 };
 
 const ALGO_HINT: Record<Algo, string> = {
-  FCFS: "Lanes are served in arrival order; each lane runs until its queue is empty (non-preemptive).",
-  SJF: "The lane with the fewest waiting vehicles goes first; it runs until empty (non-preemptive).",
   RR: "Every lane gets one time quantum of green in circular order, then the next lane (preemptive).",
   PRIORITY_AGING: `The best-priority lane goes first (1 = highest). Waiting lanes gain a level every ${AGING_STEP}s so none starves.`,
 };
 
 const isAlgo = (a?: string): a is Algo =>
-  a === "RR" || a === "PRIORITY_AGING" || a === "SJF" || a === "FCFS";
+  a === "RR" || a === "PRIORITY_AGING";
 
 type Phase = "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED";
 
@@ -75,9 +71,10 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
   const [aging, setAging] = useState<boolean>(true);
   const [speed, setSpeed] = useState<number>(1);
   const [setup, setSetup] = useState<Setup>(() => presetSetup(initialAlgo));
+  const [emergencyLane, setEmergencyLane] = useState<Direction | null>(null);
 
   // ---- Live simulation --------------------------------------------------------
-  const simRef = useRef<Sim>(createSim(setup, selectedAlgo));
+  const simRef = useRef<Sim>(createSim(setup, selectedAlgo, emergencyLane));
   const [snap, setSnap] = useState<Snapshot>(() => snapshot(simRef.current));
   const [running, setRunning] = useState<boolean>(false);
 
@@ -92,6 +89,7 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
       if (nextAlgo !== selectedAlgo) {
         setSelectedAlgo(nextAlgo);
         setSetup(presetSetup(nextAlgo));
+        setEmergencyLane(null);
       }
     }
     if (initialAlgoConfig?.quantum) setTimeQuantum(initialAlgoConfig.quantum);
@@ -100,9 +98,13 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
   // Before START, editing the lane setup rebuilds the scene so the queued cars appear live.
   useEffect(() => {
     if (simRef.current.started) return;
-    simRef.current = createSim(setup, selectedAlgo);
+    simRef.current = createSim(
+      setup,
+      selectedAlgo,
+      selectedAlgo === "PRIORITY_AGING" ? emergencyLane : null
+    );
     setSnap(snapshot(simRef.current));
-  }, [setup]);
+  }, [setup, selectedAlgo, emergencyLane]);
 
   // Animation loop: runs every frame while RUNNING.
   useEffect(() => {
@@ -135,12 +137,15 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
     ? "PAUSED"
     : "IDLE";
 
-  const totalVehicles = DIRECTIONS.reduce((n, d) => n + setup[d].count, 0);
+  const totalVehicles =
+    DIRECTIONS.reduce((n, d) => n + setup[d].count, 0) +
+    (selectedAlgo === "PRIORITY_AGING" && emergencyLane ? 1 : 0);
 
   // ---- Controls ---------------------------------------------------------------
   const reset = () => {
     setRunning(false);
     const nextSetup = presetSetup(selectedAlgo);
+    setEmergencyLane(null);
     setSetup(nextSetup);
     simRef.current = createSim(nextSetup, selectedAlgo);
     setSnap(snapshot(simRef.current));
@@ -150,7 +155,11 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
     if (phase === "RUNNING") {
       setRunning(false);
     } else if (phase === "COMPLETED") {
-      simRef.current = createSim(setup, selectedAlgo);
+      simRef.current = createSim(
+        setup,
+        selectedAlgo,
+        selectedAlgo === "PRIORITY_AGING" ? emergencyLane : null
+      );
       setSnap(snapshot(simRef.current));
       setRunning(true);
     } else if (totalVehicles > 0 || simRef.current.cars.length > 0) {
@@ -168,6 +177,11 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
 
   const injectVehicle = (lane: Direction) => {
     if (addVehicle(simRef.current, lane)) setSnap(snapshot(simRef.current));
+  };
+
+  const injectAmbulance = () => {
+    const lane = emergencyLane ?? "SOUTH";
+    if (addVehicle(simRef.current, lane, true)) setSnap(snapshot(simRef.current));
   };
 
   const setLane = (lane: Direction, patch: Partial<Setup[Direction]>) =>
@@ -191,9 +205,18 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
   const handleAlgoChange = (algo: Algo) => {
     setSelectedAlgo(algo);
     setSetup(presetSetup(algo));
+    setEmergencyLane(null);
   };
 
+  const hasAmbulance = (lane: Direction) =>
+    snap.cars.some((car) => car.emergency && car.lane === lane);
+
   const signalOf = (lane: Direction) => {
+    if (snap.emergencyState !== "IDLE") {
+      return snap.emergencyState === "ACTIVE" && snap.active === lane
+        ? "🟢 GREEN"
+        : "🔴 RED";
+    }
     if (snap.active === lane) return "🟢 GREEN";
     if (snap.clearing && snap.lastLane === lane) return "🟡 YELLOW";
     return "🔴 RED";
@@ -387,12 +410,34 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
             </div>
           </div>
 
+          {selectedAlgo === "PRIORITY_AGING" && (
+            <div>
+              <label className="block text-xs text-ink-400 mb-1">
+                Emergency Vehicle (Ambulance)
+              </label>
+              <select
+                value={emergencyLane ?? "NONE"}
+                onChange={(e) =>
+                  setEmergencyLane(e.target.value === "NONE" ? null : (e.target.value as Direction))
+                }
+                className={selectCls}
+              >
+                <option value="NONE">None</option>
+                {DIRECTIONS.map((d) => (
+                  <option key={d} value={d}>
+                    {d[0] + d.slice(1).toLowerCase()}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Live injection */}
           <div>
             <label className="block text-[10px] text-ink-500 mb-2 uppercase">
               Inject a vehicle while running
             </label>
-            <div className="grid grid-cols-4 gap-2">
+            <div className={`grid ${selectedAlgo === "PRIORITY_AGING" ? "grid-cols-5" : "grid-cols-4"} gap-2`}>
               {DIRECTIONS.map((d) => (
                 <button
                   key={d}
@@ -403,6 +448,15 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
                   + {LANE_SHORT[d]}
                 </button>
               ))}
+              {selectedAlgo === "PRIORITY_AGING" && (
+                <button
+                  onClick={injectAmbulance}
+                  disabled={!running}
+                  className="px-2 py-1.5 rounded-lg bg-red-950 hover:bg-red-900 border border-red-500/50 text-[10px] text-red-300 disabled:opacity-40"
+                >
+                  🚑 Trigger Ambulance
+                </button>
+              )}
             </div>
           </div>
 
@@ -429,31 +483,39 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
 
             {/* Signal Indicator Text */}
             <div className="absolute top-3 text-[11px] font-bold text-ink-300">
-              N: {signalOf("NORTH")}
+              N: {signalOf("NORTH")} {hasAmbulance("NORTH") && <span className="text-red-400">🚨 EMERGENCY</span>}
             </div>
             <div className="absolute bottom-3 text-[11px] font-bold text-ink-300">
-              S: {signalOf("SOUTH")}
+              S: {signalOf("SOUTH")} {hasAmbulance("SOUTH") && <span className="text-red-400">🚨 EMERGENCY</span>}
             </div>
             <div className="absolute left-3 text-[11px] font-bold text-ink-300">
-              W: {signalOf("WEST")}
+              W: {signalOf("WEST")} {hasAmbulance("WEST") && <span className="text-red-400">🚨 EMERGENCY</span>}
             </div>
             <div className="absolute right-3 text-[11px] font-bold text-ink-300">
-              E: {signalOf("EAST")}
+              E: {signalOf("EAST")} {hasAmbulance("EAST") && <span className="text-red-400">🚨 EMERGENCY</span>}
             </div>
 
             {/* Dynamic Moving Vehicles */}
             {snap.cars.map((v) => (
               <div
                 key={v.id}
-                className={`absolute w-4 h-6 ${
-                  selectedAlgo === "FCFS" ? "transition-all duration-100" : ""
-                }`}
+                className="absolute w-4 h-6"
                 style={{
                   ...getVehicleStyle(v.lane, v.progress),
                   transform: "translate(-50%, -50%)",
                 }}
               >
-                <svg
+                {v.emergency ? (
+                  <div
+                    aria-label="Ambulance"
+                    className="relative flex h-full w-full items-center justify-center text-base drop-shadow-md"
+                    style={{ transform: `rotate(${CAR_ROTATION[v.lane]}deg)` }}
+                  >
+                    🚑
+                    <span className="absolute left-1/2 top-0 h-1 w-1 -translate-x-1/2 rounded-full bg-red-500 animate-pulse" />
+                    <span className="absolute left-1/2 top-0 h-1 w-1 translate-x-0.5 rounded-full bg-blue-500 animate-pulse" />
+                  </div>
+                ) : <svg
                   viewBox="0 0 20 30"
                   aria-hidden="true"
                   className="w-full h-full drop-shadow-md"
@@ -468,12 +530,7 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
                   <path d="M5 8h10v7H5z" fill="#dbeafe" opacity="0.9" />
                   <path d="M5 18h10v3H5z" fill="#1e293b" opacity="0.8" />
                   <path d="M7 3.5h6" stroke="#fff" strokeWidth="1" strokeLinecap="round" />
-                </svg>
-                {selectedAlgo === "FCFS" && !v.released && (
-                  <span className="absolute -top-1 -right-2 rounded bg-navy-950 px-0.5 text-[7px] leading-3 text-white border border-cyan-500/70">
-                    #{v.arrivalIndex}
-                  </span>
-                )}
+                </svg>}
               </div>
             ))}
           </div>
@@ -522,7 +579,7 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
                     key={i}
                     title={`${s.lane}: ${s.start.toFixed(1)}s → ${s.end.toFixed(1)}s`}
                     style={{ flexGrow: Math.max(s.end - s.start, 0.6), flexBasis: 0 }}
-                    className={`${LANE_DOT[s.lane]} rounded-sm flex items-center justify-center text-[10px] font-bold text-navy-950 min-w-[18px]`}
+                    className={`${s.emergency ? "bg-red-500 text-white ring-1 ring-white" : `${LANE_DOT[s.lane]} text-navy-950`} rounded-sm flex items-center justify-center text-[10px] font-bold min-w-[18px]`}
                   >
                     {LANE_SHORT[s.lane]}
                   </div>
