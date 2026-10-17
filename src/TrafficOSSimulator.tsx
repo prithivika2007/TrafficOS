@@ -10,7 +10,6 @@ import {
   Snapshot,
   addVehicle,
   createSim,
-  effectivePriority,
   presetSetup,
   snapshot,
   step,
@@ -24,13 +23,13 @@ interface TrafficOSSimulatorProps {
 }
 
 const LANE_DOT: Record<Direction, string> = {
-  NORTH: "bg-red-500",
-  EAST: "bg-blue-500",
-  SOUTH: "bg-purple-500",
-  WEST: "bg-amber-500",
+  NORTH: "bg-rose-500 shadow-lg shadow-rose-500/50",
+  EAST: "bg-blue-500 shadow-lg shadow-blue-500/50",
+  SOUTH: "bg-purple-500 shadow-lg shadow-purple-500/50",
+  WEST: "bg-amber-500 shadow-lg shadow-amber-500/50",
 };
 const LANE_COLOR: Record<Direction, string> = {
-  NORTH: "#ef4444",
+  NORTH: "#f43f5e",
   EAST: "#3b82f6",
   SOUTH: "#a855f7",
   WEST: "#f59e0b",
@@ -49,8 +48,8 @@ const ALGO_LABEL: Record<Algo, string> = {
 };
 
 const ALGO_HINT: Record<Algo, string> = {
-  RR: "Every lane gets one time quantum of green in circular order, then the next lane (preemptive).",
-  PRIORITY_AGING: `The best-priority lane goes first (1 = highest). Waiting lanes gain a level every ${AGING_STEP}s so none starves.`,
+  RR: "Every lane gets one time quantum of green in circular order, then preemptively rotates.",
+  PRIORITY_AGING: `Prioritizes critical lanes. Waiting queues gain priority weight every ${AGING_STEP}s to eliminate starvation.`,
 };
 
 const isAlgo = (a?: string): a is Algo =>
@@ -65,7 +64,6 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
     ? initialAlgoConfig.algo
     : "RR";
 
-  // ---- Setup (what the user configures before pressing START) -----------------
   const [selectedAlgo, setSelectedAlgo] = useState<Algo>(initialAlgo);
   const [timeQuantum, setTimeQuantum] = useState<number>(initialAlgoConfig?.quantum || 3);
   const [aging, setAging] = useState<boolean>(true);
@@ -73,16 +71,13 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
   const [setup, setSetup] = useState<Setup>(() => presetSetup(initialAlgo));
   const [emergencyLane, setEmergencyLane] = useState<Direction | null>(null);
 
-  // ---- Live simulation --------------------------------------------------------
   const simRef = useRef<Sim>(createSim(setup, selectedAlgo, emergencyLane));
   const [snap, setSnap] = useState<Snapshot>(() => snapshot(simRef.current));
   const [running, setRunning] = useState<boolean>(false);
 
-  // Latest settings for the animation loop (avoids stale closures).
   const cfgRef = useRef({ algo: selectedAlgo, quantum: timeQuantum, aging, speed });
   cfgRef.current = { algo: selectedAlgo, quantum: timeQuantum, aging, speed };
 
-  // Sync when App passes a new algorithm / quantum (from the Lab Manual buttons).
   useEffect(() => {
     if (isAlgo(initialAlgoConfig?.algo)) {
       const nextAlgo = initialAlgoConfig.algo;
@@ -95,7 +90,6 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
     if (initialAlgoConfig?.quantum) setTimeQuantum(initialAlgoConfig.quantum);
   }, [initialAlgoConfig]);
 
-  // Before START, editing the lane setup rebuilds the scene so the queued cars appear live.
   useEffect(() => {
     if (simRef.current.started) return;
     simRef.current = createSim(
@@ -106,7 +100,6 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
     setSnap(snapshot(simRef.current));
   }, [setup, selectedAlgo, emergencyLane]);
 
-  // Animation loop: runs every frame while RUNNING.
   useEffect(() => {
     if (!running) return;
     let last = performance.now();
@@ -114,7 +107,7 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
 
     const loop = (now: number) => {
       const c = cfgRef.current;
-      const dt = Math.min((now - last) / 1000, 0.1) * c.speed; // clamp after tab switches
+      const dt = Math.min((now - last) / 1000, 0.1) * c.speed;
       last = now;
       step(simRef.current, dt, c.algo, c.quantum, c.aging);
       setSnap(snapshot(simRef.current));
@@ -141,7 +134,6 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
     DIRECTIONS.reduce((n, d) => n + setup[d].count, 0) +
     (selectedAlgo === "PRIORITY_AGING" && emergencyLane ? 1 : 0);
 
-  // ---- Controls ---------------------------------------------------------------
   const reset = () => {
     setRunning(false);
     const nextSetup = presetSetup(selectedAlgo);
@@ -167,7 +159,6 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
     }
   };
 
-  // STEP TICK: advance the simulation by exactly one second.
   const stepTick = () => {
     if (phase === "COMPLETED") return;
     const c = cfgRef.current;
@@ -187,17 +178,15 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
   const setLane = (lane: Direction, patch: Partial<Setup[Direction]>) =>
     setSetup((prev) => ({ ...prev, [lane]: { ...prev[lane], ...patch } }));
 
-  // ---- Rendering helpers ------------------------------------------------------
-  // Map progress % to absolute 2D visual layout
   const getVehicleStyle = (lane: Direction, progress: number) => {
     switch (lane) {
-      case "NORTH": // Drive down (+Y)
+      case "NORTH":
         return { top: `${progress}%`, left: "48%" };
-      case "SOUTH": // Drive up (-Y)
+      case "SOUTH":
         return { bottom: `${progress}%`, left: "52%" };
-      case "EAST": // Drive left (-X)
+      case "EAST":
         return { right: `${progress}%`, top: "48%" };
-      case "WEST": // Drive right (+X)
+      case "WEST":
         return { left: `${progress}%`, top: "52%" };
     }
   };
@@ -224,69 +213,70 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
 
   const activeIdx = snap.active ? DIRECTIONS.indexOf(snap.active) : -1;
   const preemptive = selectedAlgo === "RR" || selectedAlgo === "PRIORITY_AGING";
-  const locked = snap.started; // setup is frozen once the run has begun (RESET to edit)
+  const locked = snap.started;
 
-  // Gantt: closed segments plus the one currently green
   const segs = snap.segments
     .map((s) => ({ ...s, end: s.end ?? snap.clock }))
     .filter((s) => s.end - s.start > 0.01)
     .slice(-14);
 
   const selectCls =
-    "w-full bg-navy-950 border border-navy-700 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-cyan-500 disabled:opacity-50";
+    "w-full bg-slate-950/80 border border-slate-700/80 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all disabled:opacity-40";
 
   return (
-    <div className="space-y-6 font-mono text-slate-100">
-      {/* Top Simulator Control Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-navy-900 border border-navy-700/60 shadow-panel">
+    <div className="space-y-6 font-mono text-slate-100 max-w-7xl mx-auto p-2">
+      {/* Top Header Control Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-slate-900/90 backdrop-blur-xl border border-slate-800 shadow-2xl">
         <div className="flex items-center gap-3 flex-wrap">
           <button
             onClick={startPause}
             disabled={phase === "IDLE" && totalVehicles === 0}
-            className={`px-4 py-2 rounded-lg font-bold text-xs transition-all disabled:opacity-40 ${
+            className={`px-5 py-2.5 rounded-xl font-bold text-xs tracking-wider transition-all shadow-lg disabled:opacity-40 flex items-center gap-2 ${
               phase === "RUNNING"
-                ? "bg-amber-500 hover:bg-amber-400 text-navy-950 shadow-glow-amber"
-                : "bg-emerald-500 hover:bg-emerald-400 text-navy-950 shadow-glow-green"
+                ? "bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/20"
+                : "bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 shadow-emerald-500/20"
             }`}
           >
+            {phase === "RUNNING" && <span className="w-2 h-2 rounded-full bg-slate-950 animate-ping" />}
             {phase === "RUNNING"
-              ? "PAUSE SIMULATION"
+              ? "PAUSE KERNEL"
               : phase === "PAUSED"
-              ? "RESUME SIMULATION"
+              ? "RESUME KERNEL"
               : phase === "COMPLETED"
-              ? "RESTART SIMULATION"
-              : "START SIMULATION"}
+              ? "RESTART KERNEL"
+              : "START KERNEL"}
           </button>
 
           <button
             onClick={stepTick}
             disabled={phase === "RUNNING" || phase === "COMPLETED" || totalVehicles === 0}
-            className="px-4 py-2 rounded-lg bg-navy-800 hover:bg-navy-750 text-xs font-semibold text-cyan-400 border border-cyan-500/30 disabled:opacity-40"
+            className="px-4 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-750 text-xs font-semibold text-cyan-300 border border-cyan-500/30 transition-all disabled:opacity-40"
           >
             STEP TICK
           </button>
 
           <button
             onClick={reset}
-            className="px-4 py-2 rounded-lg bg-navy-800 hover:bg-navy-750 text-xs font-semibold text-ink-300 border border-navy-700"
+            className="px-4 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-750 text-xs font-semibold text-slate-300 border border-slate-700 transition-all hover:border-slate-500"
           >
             RESET
           </button>
         </div>
 
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-ink-500">
-            CLOCK: <span className="text-cyan-400 font-bold">{snap.clock.toFixed(1)}s</span>
-          </span>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-ink-500">STATE:</span>
+        <div className="flex items-center gap-6 bg-slate-950/60 px-4 py-2 rounded-xl border border-slate-800/80">
+          <div className="text-xs">
+            <span className="text-slate-500 mr-2">CLOCK:</span>
+            <span className="text-cyan-400 font-bold">{snap.clock.toFixed(1)}s</span>
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-slate-500">STATE:</span>
             <span
-              className={`px-2.5 py-1 rounded-md text-xs font-bold ${
+              className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold tracking-wide ${
                 phase === "RUNNING"
-                  ? "bg-emerald-950 text-emerald-400 border border-emerald-500/30"
+                  ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
                   : phase === "COMPLETED"
-                  ? "bg-cyan-950 text-cyan-400 border border-cyan-500/30"
-                  : "bg-navy-800 text-ink-400 border border-navy-700"
+                  ? "bg-cyan-500/10 text-cyan-400 border border-cyan-500/30"
+                  : "bg-slate-800 text-slate-400 border border-slate-700"
               }`}
             >
               {phase}
@@ -295,20 +285,23 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
         </div>
       </div>
 
-      {/* Main Grid View */}
+      {/* Main Dashboard Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Side: Parameters */}
-        <div className="lg:col-span-4 p-5 rounded-2xl bg-navy-900 border border-navy-700/60 space-y-4">
-          <h3 className="text-xs font-bold text-cyan-400 uppercase tracking-wider">
-            Scheduler Parameters
-          </h3>
+        {/* Left Control Panel */}
+        <div className="lg:col-span-4 p-5 rounded-2xl bg-slate-900/90 backdrop-blur-xl border border-slate-800 space-y-5 shadow-xl">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-bold text-cyan-400 uppercase tracking-widest flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+              Scheduler Parameters
+            </h3>
+          </div>
 
           <div>
-            <label className="block text-xs text-ink-400 mb-1">Active Algorithm</label>
+            <label className="block text-[11px] text-slate-400 mb-1.5 font-medium">Active Algorithm</label>
             <select
               value={selectedAlgo}
               onChange={(e) => handleAlgoChange(e.target.value as Algo)}
-              className="w-full bg-navy-950 border border-navy-700 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500"
+              className={selectCls}
             >
               {(Object.keys(ALGO_LABEL) as Algo[]).map((a) => (
                 <option key={a} value={a}>
@@ -316,12 +309,14 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
                 </option>
               ))}
             </select>
-            <p className="mt-2 text-[10px] leading-relaxed text-ink-500">{ALGO_HINT[selectedAlgo]}</p>
+            <p className="mt-2 text-[10px] leading-relaxed text-slate-400 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/60">
+              {ALGO_HINT[selectedAlgo]}
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3 text-xs">
             <div>
-              <label className="block text-[10px] text-ink-500 mb-1">TIME QUANTUM</label>
+              <label className="block text-[10px] text-slate-400 mb-1.5 font-medium">TIME QUANTUM</label>
               <select
                 value={timeQuantum}
                 onChange={(e) => setTimeQuantum(Number(e.target.value))}
@@ -336,7 +331,7 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
               </select>
             </div>
             <div>
-              <label className="block text-[10px] text-ink-500 mb-1">SIM SPEED</label>
+              <label className="block text-[10px] text-slate-400 mb-1.5 font-medium">SIM SPEED</label>
               <select
                 value={speed}
                 onChange={(e) => setSpeed(Number(e.target.value))}
@@ -354,30 +349,31 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
           {selectedAlgo === "PRIORITY_AGING" && (
             <button
               onClick={() => setAging((a) => !a)}
-              className={`w-full px-3 py-2 rounded-lg text-xs font-bold border transition-all ${
+              className={`w-full px-3 py-2.5 rounded-xl text-xs font-bold border transition-all flex items-center justify-center gap-2 ${
                 aging
-                  ? "bg-emerald-950 text-emerald-400 border-emerald-500/30"
-                  : "bg-navy-800 text-ink-400 border-navy-700"
+                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20"
+                  : "bg-slate-800 text-slate-400 border-slate-700"
               }`}
             >
-              DYNAMIC AGING: {aging ? "ACTIVE" : "OFF (lanes can starve)"}
+              <span className={`w-2 h-2 rounded-full ${aging ? "bg-emerald-400 animate-ping" : "bg-slate-500"}`} />
+              DYNAMIC AGING: {aging ? "ACTIVE" : "OFF"}
             </button>
           )}
 
-          {/* Per-lane workload */}
-          <div>
-            <label className="block text-[10px] text-ink-500 mb-2 uppercase">
-              Lane workload {locked && "(locked — press RESET to edit)"}
+          {/* Lane Workload Config */}
+          <div className="space-y-2.5 pt-2 border-t border-slate-800/80">
+            <label className="block text-[10px] text-slate-400 uppercase font-semibold tracking-wider">
+              Lane Workload {locked && "(Locked — Reset to edit)"}
             </label>
-            <div className="space-y-2">
-              <div className="grid grid-cols-[1fr_1fr_1fr] gap-2 text-[10px] text-ink-500">
-                <span>LANE</span>
-                <span>VEHICLES</span>
-                <span className={selectedAlgo === "PRIORITY_AGING" ? "" : "opacity-40"}>PRIORITY</span>
-              </div>
+            <div className="grid grid-cols-[1.2fr_1fr_1fr] gap-2 text-[10px] text-slate-500 px-1 font-semibold">
+              <span>LANE</span>
+              <span>VEHICLES</span>
+              <span className={selectedAlgo === "PRIORITY_AGING" ? "" : "opacity-30"}>PRIORITY</span>
+            </div>
+            <div className="space-y-1.5">
               {DIRECTIONS.map((d) => (
-                <div key={d} className="grid grid-cols-[1fr_1fr_1fr] gap-2 items-center">
-                  <span className="flex items-center gap-2 text-xs">
+                <div key={d} className="grid grid-cols-[1.2fr_1fr_1fr] gap-2 items-center bg-slate-950/40 p-1.5 rounded-xl border border-slate-800/50">
+                  <span className="flex items-center gap-2 text-xs font-semibold text-slate-300">
                     <span className={`w-2.5 h-2.5 rounded-full ${LANE_DOT[d]}`} />
                     {d}
                   </span>
@@ -411,9 +407,9 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
           </div>
 
           {selectedAlgo === "PRIORITY_AGING" && (
-            <div>
-              <label className="block text-xs text-ink-400 mb-1">
-                Emergency Vehicle (Ambulance)
+            <div className="pt-2 border-t border-slate-800/80">
+              <label className="block text-xs text-slate-300 mb-1.5 font-medium">
+                Emergency Vehicle Lane
               </label>
               <select
                 value={emergencyLane ?? "NONE"}
@@ -432,10 +428,10 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
             </div>
           )}
 
-          {/* Live injection */}
-          <div>
-            <label className="block text-[10px] text-ink-500 mb-2 uppercase">
-              Inject a vehicle while running
+          {/* Live Injection Actions */}
+          <div className="pt-2 border-t border-slate-800/80">
+            <label className="block text-[10px] text-slate-400 mb-2 uppercase font-semibold tracking-wider">
+              Live Injection Controls
             </label>
             <div className={`grid ${selectedAlgo === "PRIORITY_AGING" ? "grid-cols-5" : "grid-cols-4"} gap-2`}>
               {DIRECTIONS.map((d) => (
@@ -443,7 +439,8 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
                   key={d}
                   onClick={() => injectVehicle(d)}
                   disabled={!snap.started || snap.queued[d] >= MAX_PER_LANE}
-                  className="px-2 py-1.5 rounded-lg bg-navy-950 hover:bg-navy-800 border border-navy-700 text-xs text-cyan-400 disabled:opacity-40"
+                  className="px-2 py-2 rounded-xl bg-slate-950/80 hover:bg-slate-800 border border-slate-700/80 text-xs font-bold text-cyan-400 transition-all disabled:opacity-30 shadow-sm"
+                  title={`Add vehicle to ${d}`}
                 >
                   + {LANE_SHORT[d]}
                 </button>
@@ -452,54 +449,59 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
                 <button
                   onClick={injectAmbulance}
                   disabled={!running}
-                  className="px-2 py-1.5 rounded-lg bg-red-950 hover:bg-red-900 border border-red-500/50 text-[10px] text-red-300 disabled:opacity-40"
+                  className="px-2 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/40 text-[11px] font-bold text-rose-300 transition-all disabled:opacity-30 col-span-5 flex items-center justify-center gap-1.5"
                 >
-                  🚑 Trigger Ambulance
+                  <span>🚑</span> TRIGGER EMERGENCY AMBULANCE PREEMPTION
                 </button>
               )}
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <div className="p-3 rounded-xl bg-navy-850 border border-navy-700/50">
-              <span className="text-ink-500 block text-[10px]">GREEN SIGNAL</span>
-              <span className="text-emerald-400 font-bold">
-                {snap.active ?? (snap.clearing ? "CONTEXT SWITCH" : "—")}
+          <div className="grid grid-cols-2 gap-3 text-xs pt-2 border-t border-slate-800/80">
+            <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800">
+              <span className="text-slate-500 block text-[10px] font-semibold">GREEN SIGNAL</span>
+              <span className="text-emerald-400 font-bold tracking-wide">
+                {snap.active ?? (snap.clearing ? "SWITCHING" : "—")}
               </span>
             </div>
-            <div className="p-3 rounded-xl bg-navy-850 border border-navy-700/50">
-              <span className="text-ink-500 block text-[10px]">CONTEXT SWITCHES</span>
-              <span className="text-purple-400 font-bold">{snap.contextSwitches}</span>
+            <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800">
+              <span className="text-slate-500 block text-[10px] font-semibold">CONTEXT SWITCHES</span>
+              <span className="text-purple-400 font-bold tracking-wide">{snap.contextSwitches}</span>
             </div>
           </div>
         </div>
 
-        {/* Right Side: Visual Canvas */}
-        <div className="lg:col-span-8 p-5 rounded-2xl bg-navy-900 border border-navy-700/60 flex flex-col justify-between">
-          <div className="relative w-full h-80 bg-navy-950 rounded-xl border border-navy-800 overflow-hidden flex items-center justify-center">
-            {/* Roads Layout */}
-            <div className="absolute w-20 h-full bg-navy-850 border-x border-dashed border-navy-700"></div>
-            <div className="absolute h-20 w-full bg-navy-850 border-y border-dashed border-navy-700"></div>
-
-            {/* Signal Indicator Text */}
-            <div className="absolute top-3 text-[11px] font-bold text-ink-300">
-              N: {signalOf("NORTH")} {hasAmbulance("NORTH") && <span className="text-red-400">🚨 EMERGENCY</span>}
+        {/* Right Canvas and Analytics Panel */}
+        <div className="lg:col-span-8 p-5 rounded-2xl bg-slate-900/90 backdrop-blur-xl border border-slate-800 flex flex-col justify-between shadow-xl">
+          {/* Intersection Canvas */}
+          <div className="relative w-full h-80 bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden flex items-center justify-center shadow-inner">
+            {/* Roads */}
+            <div className="absolute w-24 h-full bg-slate-900/90 border-x border-dashed border-slate-700/50 flex justify-center">
+              <div className="absolute w-0.5 h-full bg-amber-400/20" />
             </div>
-            <div className="absolute bottom-3 text-[11px] font-bold text-ink-300">
-              S: {signalOf("SOUTH")} {hasAmbulance("SOUTH") && <span className="text-red-400">🚨 EMERGENCY</span>}
-            </div>
-            <div className="absolute left-3 text-[11px] font-bold text-ink-300">
-              W: {signalOf("WEST")} {hasAmbulance("WEST") && <span className="text-red-400">🚨 EMERGENCY</span>}
-            </div>
-            <div className="absolute right-3 text-[11px] font-bold text-ink-300">
-              E: {signalOf("EAST")} {hasAmbulance("EAST") && <span className="text-red-400">🚨 EMERGENCY</span>}
+            <div className="absolute h-24 w-full bg-slate-900/90 border-y border-dashed border-slate-700/50 flex items-center">
+              <div className="absolute w-full h-0.5 bg-amber-400/20" />
             </div>
 
-            {/* Dynamic Moving Vehicles */}
+            {/* Signal Labels */}
+            <div className="absolute top-3 left-4 text-[11px] font-bold tracking-wide text-slate-300 bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-800">
+              NORTH: {signalOf("NORTH")} {hasAmbulance("NORTH") && <span className="text-rose-400 animate-pulse font-extrabold">🚨 EMERGENCY</span>}
+            </div>
+            <div className="absolute bottom-3 left-4 text-[11px] font-bold tracking-wide text-slate-300 bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-800">
+              SOUTH: {signalOf("SOUTH")} {hasAmbulance("SOUTH") && <span className="text-rose-400 animate-pulse font-extrabold">🚨 EMERGENCY</span>}
+            </div>
+            <div className="absolute left-3 top-16 text-[11px] font-bold tracking-wide text-slate-300 bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-800">
+              WEST: {signalOf("WEST")} {hasAmbulance("WEST") && <span className="text-rose-400 animate-pulse font-extrabold">🚨 EMERGENCY</span>}
+            </div>
+            <div className="absolute right-3 top-16 text-[11px] font-bold tracking-wide text-slate-300 bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-800">
+              EAST: {signalOf("EAST")} {hasAmbulance("EAST") && <span className="text-rose-400 animate-pulse font-extrabold">🚨 EMERGENCY</span>}
+            </div>
+
+            {/* Moving Vehicles */}
             {snap.cars.map((v) => (
               <div
                 key={v.id}
-                className="absolute w-4 h-6"
+                className="absolute w-4 h-6 transition-all duration-75"
                 style={{
                   ...getVehicleStyle(v.lane, v.progress),
                   transform: "translate(-50%, -50%)",
@@ -508,56 +510,57 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
                 {v.emergency ? (
                   <div
                     aria-label="Ambulance"
-                    className="relative flex h-full w-full items-center justify-center text-base drop-shadow-md"
+                    className="relative flex h-full w-full items-center justify-center text-lg drop-shadow-lg"
                     style={{ transform: `rotate(${CAR_ROTATION[v.lane]}deg)` }}
                   >
                     🚑
-                    <span className="absolute left-1/2 top-0 h-1 w-1 -translate-x-1/2 rounded-full bg-red-500 animate-pulse" />
-                    <span className="absolute left-1/2 top-0 h-1 w-1 translate-x-0.5 rounded-full bg-blue-500 animate-pulse" />
+                    <span className="absolute left-1/2 top-0 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-rose-500 animate-ping" />
+                    <span className="absolute left-1/2 top-0 h-1.5 w-1.5 translate-x-1 rounded-full bg-blue-500 animate-ping" />
                   </div>
-                ) : <svg
-                  viewBox="0 0 20 30"
-                  aria-hidden="true"
-                  className="w-full h-full drop-shadow-md"
-                  style={{ transform: `rotate(${CAR_ROTATION[v.lane]}deg)` }}
-                >
-                  <path
-                    d="M6 1.5h8l3 5v17l-3 5H6l-3-5v-17l3-5Z"
-                    fill={LANE_COLOR[v.lane]}
-                    stroke="#0f172a"
-                    strokeWidth="1"
-                  />
-                  <path d="M5 8h10v7H5z" fill="#dbeafe" opacity="0.9" />
-                  <path d="M5 18h10v3H5z" fill="#1e293b" opacity="0.8" />
-                  <path d="M7 3.5h6" stroke="#fff" strokeWidth="1" strokeLinecap="round" />
-                </svg>}
+                ) : (
+                  <svg
+                    viewBox="0 0 20 30"
+                    aria-hidden="true"
+                    className="w-full h-full drop-shadow-md"
+                    style={{ transform: `rotate(${CAR_ROTATION[v.lane]}deg)` }}
+                  >
+                    <path
+                      d="M6 1.5h8l3 5v17l-3 5H6l-3-5v-17l3-5Z"
+                      fill={LANE_COLOR[v.lane]}
+                      stroke="#0f172a"
+                      strokeWidth="1.2"
+                    />
+                    <path d="M5 8h10v7H5z" fill="#f8fafc" opacity="0.9" />
+                    <path d="M5 18h10v3H5z" fill="#0f172a" opacity="0.8" />
+                    <path d="M7 3.5h6" stroke="#fff" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                )}
               </div>
             ))}
           </div>
 
-          {/* Queue Index Grid */}
-          <div className="mt-4 p-3 rounded-xl bg-navy-950 border border-navy-800">
-            <span className="text-[10px] text-ink-500 font-bold block mb-2 uppercase">
+          {/* Circular Queue Traversal Grid */}
+          <div className="mt-4 p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800">
+            <span className="text-[10px] text-slate-400 font-bold block mb-2.5 uppercase tracking-widest flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
               Circular Queue Traversal Array: (i + 1) MOD 4
             </span>
-            <div className="grid grid-cols-4 gap-2 text-center text-xs">
+            <div className="grid grid-cols-4 gap-2.5 text-center text-xs">
               {DIRECTIONS.map((dir, idx) => {
                 const isActive = idx === activeIdx;
                 return (
                   <div
                     key={dir}
-                    className={`p-2 rounded-lg border transition-all ${
+                    className={`p-2.5 rounded-xl border transition-all ${
                       isActive
-                        ? "bg-cyan-950/80 border-cyan-500 text-cyan-400 font-bold"
-                        : "bg-navy-900 border-navy-800 text-ink-500"
+                        ? "bg-cyan-500/10 border-cyan-500/60 text-cyan-300 font-bold shadow-lg shadow-cyan-500/10"
+                        : "bg-slate-900 border-slate-800 text-slate-400"
                     }`}
                   >
-                    <div className="text-[9px]">INDEX [{idx}]</div>
-                    <div>{dir}</div>
-                    <div className="text-[9px] mt-0.5">
+                    <div className="text-[9px] opacity-70">INDEX [{idx}]</div>
+                    <div className="font-semibold">{dir}</div>
+                    <div className="text-[10px] mt-0.5 text-slate-300">
                       {snap.queued[dir]} waiting
-                      {selectedAlgo === "PRIORITY_AGING" &&
-                        ` · P${effectivePriority(simRef.current, dir, aging)}`}
                     </div>
                   </div>
                 );
@@ -565,21 +568,22 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
             </div>
           </div>
 
-          {/* Gantt timeline */}
-          <div className="mt-4 p-3 rounded-xl bg-navy-950 border border-navy-800">
-            <span className="text-[10px] text-ink-500 font-bold block mb-2 uppercase">
-              Gantt Timeline (green slices)
+          {/* Gantt Timeline */}
+          <div className="mt-4 p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800">
+            <span className="text-[10px] text-slate-400 font-bold block mb-2.5 uppercase tracking-widest flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              Scheduler Gantt Timeline (Green Slices)
             </span>
             {segs.length === 0 ? (
-              <div className="text-[11px] text-ink-500">Press START to generate the schedule.</div>
+              <div className="text-xs text-slate-500 italic py-2">Press START KERNEL to generate scheduling execution trace...</div>
             ) : (
-              <div className="flex gap-0.5 h-8">
+              <div className="flex gap-1 h-9 items-center bg-slate-900 p-1.5 rounded-xl border border-slate-800">
                 {segs.map((s, i) => (
                   <div
                     key={i}
                     title={`${s.lane}: ${s.start.toFixed(1)}s → ${s.end.toFixed(1)}s`}
-                    style={{ flexGrow: Math.max(s.end - s.start, 0.6), flexBasis: 0 }}
-                    className={`${s.emergency ? "bg-red-500 text-white ring-1 ring-white" : `${LANE_DOT[s.lane]} text-navy-950`} rounded-sm flex items-center justify-center text-[10px] font-bold min-w-[18px]`}
+                    style={{ flexGrow: Math.max(s.end - s.start, 0.8), flexBasis: 0 }}
+                    className={`${s.emergency ? "bg-rose-500 text-white ring-2 ring-white/80 animate-pulse font-black" : `${LANE_DOT[s.lane]} text-slate-950`} rounded-lg flex items-center justify-center text-[10px] font-bold min-w-[22px] shadow-sm`}
                   >
                     {LANE_SHORT[s.lane]}
                   </div>
@@ -588,18 +592,18 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
             )}
           </div>
 
-          {/* Metrics */}
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
+          {/* Real-time Performance Metrics */}
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-center text-xs">
             {[
               { label: "AVG WAIT", value: `${snap.avgWait.toFixed(1)}s`, cls: "text-cyan-400" },
               { label: "AVG TURNAROUND", value: `${snap.avgTat.toFixed(1)}s`, cls: "text-emerald-400" },
               { label: "THROUGHPUT", value: `${snap.throughput.toFixed(1)}/min`, cls: "text-sky-400" },
               { label: "SERVED", value: `${snap.served}`, cls: "text-purple-400" },
-              { label: "LONGEST LANE WAIT", value: `${snap.maxLaneWait.toFixed(1)}s`, cls: "text-rose-400" },
+              { label: "LONGEST WAIT", value: `${snap.maxLaneWait.toFixed(1)}s`, cls: "text-rose-400" },
             ].map((m) => (
-              <div key={m.label} className="p-2.5 rounded-xl bg-navy-850 border border-navy-700/50">
-                <span className="text-ink-500 block text-[9px]">{m.label}</span>
-                <span className={`${m.cls} font-bold`}>{m.value}</span>
+              <div key={m.label} className="p-3 rounded-2xl bg-slate-950/60 border border-slate-800 shadow-sm">
+                <span className="text-slate-500 block text-[9px] font-semibold mb-1">{m.label}</span>
+                <span className={`${m.cls} font-black text-sm tracking-tight`}>{m.value}</span>
               </div>
             ))}
           </div>
