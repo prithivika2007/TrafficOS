@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 
 const LINKS = [
-  { label: "How It Works", href: "#how-it-works" },
-  { label: "Algorithms", href: "#algorithms" },
+  { label: "Landing", href: "#landing" },
+  { label: "Kernel Mapping", href: "#kernel" },
+  { label: "Lab Manual", href: "#manual" },
+  { label: "Scheduling Algorithms", href: "#algorithms" },
   { label: "Simulation", href: "#simulation" },
-  { label: "About", href: "#about" },
+  { label: "Live CCTV", href: "#live-cctv" },
 ];
 
-export default function Navbar() {
+export default function Navbar({ activeTab, setActiveTab }) {
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
@@ -35,25 +37,50 @@ export default function Navbar() {
           </span>
         </a>
 
-        <ul className="hidden md:flex items-center gap-8 font-body text-sm text-ink-300">
-          {LINKS.map((link) => (
-            <li key={link.href}>
-              <a
-                href={link.href}
-                className="relative py-1 transition-colors hover:text-ink-100 after:absolute after:left-0 after:-bottom-0.5 after:h-px after:w-0 after:bg-signal-green after:transition-all after:duration-300 hover:after:w-full"
-              >
-                {link.label}
-              </a>
-            </li>
-          ))}
+        <ul className="hidden lg:flex items-center gap-5 font-body text-sm text-ink-300">
+          {LINKS.map((link) => {
+            const tab = link.href === "#live-cctv"
+              ? "live"
+              : link.href === "#simulation"
+                ? "simulator"
+                : link.href.slice(1);
+            const isActive = activeTab === tab;
+
+            return (
+              <li key={link.href}>
+                <button
+                  type="button"
+                  aria-current={isActive ? "page" : undefined}
+                  onClick={() => setActiveTab?.(tab)}
+                  className={`relative py-1 transition-colors after:absolute after:left-0 after:-bottom-0.5 after:h-px after:bg-signal-green after:transition-all after:duration-300 ${
+                    isActive
+                      ? "text-ink-100 after:w-full"
+                      : "text-ink-300 hover:text-ink-100 after:w-0 hover:after:w-full"
+                  }`}
+                >
+                  {link.label}
+                </button>
+              </li>
+            );
+          })}
         </ul>
 
-        <a
-          href="#simulation"
-          className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-signal-green/30 bg-signal-green/10 px-4 py-1.5 text-sm font-medium text-signal-green transition-all hover:bg-signal-green/15 hover:border-signal-green/50 hover:shadow-glow"
-        >
-          Start Simulation
-        </a>
+        <div className="hidden sm:flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab?.("live")}
+            className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-4 py-1.5 text-sm font-medium text-cyan-400 transition-all hover:bg-cyan-500/20 hover:border-cyan-500/50"
+          >
+            🌐 Live CCTV
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab?.("simulator")}
+            className="inline-flex items-center gap-1.5 rounded-full border border-signal-green/30 bg-signal-green/10 px-4 py-1.5 text-sm font-medium text-signal-green transition-all hover:bg-signal-green/15 hover:border-signal-green/50 hover:shadow-glow"
+          >
+            Start Simulation
+          </button>
+        </div>
       </nav>
     </header>
   );

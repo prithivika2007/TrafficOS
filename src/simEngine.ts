@@ -6,7 +6,12 @@
  */
 
 export type Direction = "NORTH" | "EAST" | "SOUTH" | "WEST";
-export type Algo = "FCFS" | "SJF" | "RR" | "PRIORITY_AGING";
+export type Algo = "RR" | "PRIORITY_AGING";
+export type EmergencyState =
+  | "IDLE"
+  | "CLEARING_TO_EMERGENCY"
+  | "ACTIVE"
+  | "CLEARING_TO_NORMAL";
 
 export const DIRECTIONS: Direction[] = ["NORTH", "EAST", "SOUTH", "WEST"];
 
@@ -17,8 +22,8 @@ export const SLOT_GAP: Record<Direction, number> = { NORTH: 5.5, SOUTH: 5.5, EAS
 export const CAR_SPEED = 35; // % of canvas per second
 export const HEADWAY = 1; // seconds between vehicles released on green (service time per vehicle)
 export const CLEARANCE = 1; // seconds of all-red between lanes (context-switch cost)
-export const AGING_STEP = 4; // a waiting lane gains one priority level every N seconds
-export const MAX_PER_LANE = 6;
+export const AGING_STEP = 2; // a waiting lane gains one priority level every N seconds
+export const MAX_PER_LANE = 7;
 
 export interface Car {
   id: number;
@@ -27,12 +32,14 @@ export interface Car {
   released: boolean;
   arrival: number;
   releasedAt: number | null;
+  emergency: boolean;
 }
 
 export interface Segment {
   lane: Direction;
   start: number;
   end: number | null; // null = still green
+  emergency: boolean;
 }
 
 export interface LaneSetup {
@@ -58,26 +65,67 @@ export interface Sim {
   served: number;
   waitSum: number;
   tatSum: number;
+  emergencyId: number | null;
+  emergencyLane: Direction | null;
+  emergencyState: EmergencyState;
+  emergencyGreenElapsed: number;
+  emergencyVehiclesReleased: number;
+  emergencyAmbulancePassed: boolean;
+  logs: string[];
   started: boolean;
   finished: boolean;
 }
 
-export const defaultSetup = (): Setup => ({
-  NORTH: { count: 4, priority: 2 },
-  EAST: { count: 4, priority: 3 },
-  SOUTH: { count: 4, priority: 1 },
-  WEST: { count: 4, priority: 4 },
-});
+export const presetSetup = (algo: Algo): Setup => {
+  const priorities: Record<Direction, number> =
+    algo === "PRIORITY_AGING"
+      ? { NORTH: 4, EAST: 1, SOUTH: 3, WEST: 2 }
+      : { NORTH: 2, EAST: 2, SOUTH: 2, WEST: 2 };
+
+  const counts: Record<Direction, number> = {
+    NORTH: 4,
+    EAST: 4,
+    SOUTH: 4,
+    WEST: 4,
+  };
+
+  if (algo === "RR") {
+    counts.NORTH = 5;
+    counts.EAST = 3;
+    counts.SOUTH = 6;
+    counts.WEST = 4;
+  } else {
+    counts.NORTH = 4;
+    counts.EAST = 6;
+    counts.SOUTH = 3;
+    counts.WEST = 5;
+  }
+
+  return {
+    NORTH: { count: counts.NORTH, priority: priorities.NORTH },
+    EAST: { count: counts.EAST, priority: priorities.EAST },
+    SOUTH: { count: counts.SOUTH, priority: priorities.SOUTH },
+    WEST: { count: counts.WEST, priority: priorities.WEST },
+  };
+};
+
+export const defaultSetup = (): Setup => presetSetup("RR");
 
 const slotPos = (lane: Direction, k: number) => STOP_LINE[lane] - k * SLOT_GAP[lane];
 
 /** Unreleased (waiting) vehicles of a lane, front of the queue first. */
 export const queueOf = (sim: Sim, lane: Direction): Car[] =>
-  sim.cars.filter((c) => c.lane === lane && !c.released).sort((a, b) => a.id - b.id);
+  sim.cars
+    .filter((c) => c.lane === lane && !c.released)
+    .sort((a, b) => Number(b.emergency) - Number(a.emergency) || a.id - b.id);
 
 const queueLen = (sim: Sim, lane: Direction) => queueOf(sim, lane).length;
 
-export function createSim(setup: Setup): Sim {
+export function createSim(
+  setup: Setup,
+  algo: Algo = "RR",
+  emergencyLane: Direction | null = null
+): Sim {
   const sim: Sim = {
     clock: 0,
     cars: [],
@@ -100,6 +148,13 @@ export function createSim(setup: Setup): Sim {
     served: 0,
     waitSum: 0,
     tatSum: 0,
+    emergencyId: null,
+    emergencyLane: null,
+    emergencyState: "IDLE",
+    emergencyGreenElapsed: 0,
+    emergencyVehiclesReleased: 0,
+    emergencyAmbulancePassed: false,
+    logs: [],
     started: false,
     finished: false,
   };
@@ -114,25 +169,43 @@ export function createSim(setup: Setup): Sim {
         released: false,
         arrival: 0,
         releasedAt: null,
+        emergency: false,
       });
     }
+  }
+  if (emergencyLane) {
+    const car: Car = {
+      id: sim.nextId++,
+      lane: emergencyLane,
+      progress: slotPos(emergencyLane, 0),
+      released: false,
+      arrival: 0,
+      releasedAt: null,
+      emergency: true,
+    };
+    sim.cars.push(car);
   }
   return sim;
 }
 
 /** Enqueue one more vehicle on a lane while the simulation is live. */
-export function addVehicle(sim: Sim, lane: Direction): boolean {
+export function addVehicle(sim: Sim, lane: Direction, emergency = false): boolean {
   const k = queueLen(sim, lane);
-  if (k >= MAX_PER_LANE) return false;
+  if (!emergency && k >= MAX_PER_LANE) return false;
   if (k === 0) sim.waitSince[lane] = sim.clock; // lane just became "ready"
-  sim.cars.push({
+  const car: Car = {
     id: sim.nextId++,
     lane,
     progress: 0, // drives in from the edge to the back of the queue
     released: false,
     arrival: sim.clock,
     releasedAt: null,
-  });
+    emergency,
+  };
+  sim.cars.push(car);
+  if (emergency && sim.started && sim.emergencyState === "IDLE") {
+    beginEmergencyClearance(sim, car);
+  }
   sim.finished = false;
   return true;
 }
@@ -150,16 +223,6 @@ export function pickLane(sim: Sim, algo: Algo, aging: boolean): Direction | null
   if (cands.length === 0) return null;
 
   switch (algo) {
-    case "FCFS": {
-      // earliest-arrived waiting vehicle wins
-      return cands.reduce((best, d) =>
-        queueOf(sim, d)[0].id < queueOf(sim, best)[0].id ? d : best
-      );
-    }
-    case "SJF": {
-      // shortest remaining queue wins
-      return cands.reduce((best, d) => (queueLen(sim, d) < queueLen(sim, best) ? d : best));
-    }
     case "RR": {
       for (let i = 1; i <= DIRECTIONS.length; i++) {
         const idx = (sim.rrPtr + i + DIRECTIONS.length) % DIRECTIONS.length;
@@ -168,6 +231,10 @@ export function pickLane(sim: Sim, algo: Algo, aging: boolean): Direction | null
       return cands[0];
     }
     case "PRIORITY_AGING": {
+      const emergency = cands.find((lane) =>
+        queueOf(sim, lane).some((car) => car.emergency)
+      );
+      if (emergency) return emergency;
       return cands.reduce((best, d) => {
         const pd = effectivePriority(sim, d, aging);
         const pb = effectivePriority(sim, best, aging);
@@ -188,8 +255,16 @@ function startSlice(sim: Sim, lane: Direction) {
   sim.rrPtr = DIRECTIONS.indexOf(lane);
 
   const last = sim.segments[sim.segments.length - 1];
-  if (last && last.lane === lane && last.end === sim.clock) last.end = null; // merge contiguous slices
-  else sim.segments.push({ lane, start: sim.clock, end: null });
+  const emergency =
+    (sim.emergencyState === "ACTIVE" && sim.emergencyLane === lane) ||
+    queueOf(sim, lane).some((car) => car.emergency);
+  if (
+    last &&
+    last.lane === lane &&
+    last.emergency === emergency &&
+    last.end === sim.clock
+  ) last.end = null;
+  else sim.segments.push({ lane, start: sim.clock, end: null, emergency });
 }
 
 function endSlice(sim: Sim) {
@@ -201,10 +276,66 @@ function endSlice(sim: Sim) {
   sim.active = null;
 }
 
+function beginEmergencyClearance(sim: Sim, ambulance: Car) {
+  sim.logs.push(`EMERGENCY: ambulance detected in ${ambulance.lane} lane`);
+  if (sim.active !== null) {
+    sim.logs.push(`EMERGENCY: preempting ${sim.active} green -> RED`);
+    endSlice(sim);
+  }
+  sim.emergencyState = "CLEARING_TO_EMERGENCY";
+  sim.emergencyId = ambulance.id;
+  sim.emergencyLane = ambulance.lane;
+  sim.emergencyGreenElapsed = 0;
+  sim.emergencyVehiclesReleased = 0;
+  sim.emergencyAmbulancePassed = false;
+  sim.clearance = 1.5;
+  sim.logs.push("ALL-RED clearance");
+}
+
 function tick(sim: Sim, h: number, algo: Algo, quantum: number, aging: boolean) {
   if (sim.finished) return;
   sim.started = true;
   sim.clock += h;
+
+  if (algo === "PRIORITY_AGING" && sim.emergencyState === "IDLE") {
+    const ambulance = sim.cars.find((car) => car.emergency && !car.released);
+    if (ambulance) beginEmergencyClearance(sim, ambulance);
+  }
+
+  if (sim.emergencyState === "CLEARING_TO_EMERGENCY") {
+    sim.clearance = Math.max(0, sim.clearance - h);
+    if (sim.clearance === 0) {
+      const ambulance = sim.cars.find((car) => car.id === sim.emergencyId);
+      if (!ambulance) {
+        sim.emergencyState = "IDLE";
+        sim.emergencyId = null;
+        return;
+      }
+      sim.emergencyState = "ACTIVE";
+      startSlice(sim, ambulance.lane);
+      sim.logs.push(`${ambulance.lane} GREEN (emergency)`);
+    }
+    return;
+  }
+
+  if (sim.emergencyState === "CLEARING_TO_NORMAL") {
+    sim.clearance = Math.max(0, sim.clearance - h);
+    if (sim.clearance === 0) {
+      sim.emergencyState = "IDLE";
+      sim.emergencyId = null;
+      sim.logs.push("EMERGENCY cleared, resuming priority scheduling");
+      sim.emergencyLane = null;
+    }
+    if (sim.emergencyState !== "IDLE") return;
+  }
+
+  if (algo === "PRIORITY_AGING" && sim.emergencyState === "IDLE") {
+    const queuedAmbulance = sim.cars.find((car) => car.emergency && !car.released);
+    if (queuedAmbulance) {
+      beginEmergencyClearance(sim, queuedAmbulance);
+      return;
+    }
+  }
 
   // 1) All-red gap, then dispatch.
   if (sim.active === null) {
@@ -222,30 +353,55 @@ function tick(sim: Sim, h: number, algo: Algo, quantum: number, aging: boolean) 
     sim.sliceElapsed += h;
     sim.releaseTimer += h;
 
-    const preemptive = algo === "RR" || algo === "PRIORITY_AGING";
-    const expired = preemptive && sim.sliceElapsed >= quantum - 1e-9;
-
-    if (!expired) {
-      while (sim.releaseTimer >= HEADWAY - 1e-9 && queueLen(sim, lane) > 0) {
-        const head = queueOf(sim, lane)[0];
-        head.released = true;
-        head.releasedAt = sim.clock;
-        sim.releaseTimer -= HEADWAY;
+    if (sim.emergencyState === "ACTIVE") {
+      sim.emergencyGreenElapsed += h;
+      if (!sim.emergencyAmbulancePassed) {
+        const ambulance = sim.cars.find((car) => car.id === sim.emergencyId);
+        if (ambulance?.released) sim.releaseTimer = 0;
+        if (ambulance && !ambulance.released && sim.releaseTimer >= HEADWAY - 1e-9) {
+          ambulance.released = true;
+          ambulance.releasedAt = sim.clock;
+          sim.releaseTimer -= HEADWAY;
+        }
+      } else {
+        while (
+          sim.releaseTimer >= HEADWAY - 1e-9 &&
+          queueOf(sim, lane).some((car) => !car.emergency) &&
+          sim.emergencyVehiclesReleased < 6
+        ) {
+          const head = queueOf(sim, lane).find((car) => !car.emergency);
+          if (!head) break;
+          head.released = true;
+          head.releasedAt = sim.clock;
+          sim.releaseTimer -= HEADWAY;
+          sim.emergencyVehiclesReleased++;
+        }
       }
-    }
-
-    // A lane is only "done" once its last vehicle has had its full service time (HEADWAY) on green.
-    const empty = queueLen(sim, lane) === 0 && sim.releaseTimer >= HEADWAY - 1e-9;
-    if (expired || empty) {
-      endSlice(sim);
-      const next = pickLane(sim, algo, aging);
-      if (next === lane) startSlice(sim, lane); // same lane keeps going: no context switch
-      else if (next !== null) sim.clearance = CLEARANCE;
+    } else {
+      const preemptive = algo === "RR" || algo === "PRIORITY_AGING";
+      const expired = preemptive && sim.sliceElapsed >= quantum - 1e-9;
+      if (!expired) {
+        while (sim.releaseTimer >= HEADWAY - 1e-9 && queueLen(sim, lane) > 0) {
+          const head = queueOf(sim, lane)[0];
+          head.released = true;
+          head.releasedAt = sim.clock;
+          sim.releaseTimer -= HEADWAY;
+        }
+      }
+      // A lane is only "done" once its last vehicle has had its full service time (HEADWAY) on green.
+      const empty = queueLen(sim, lane) === 0 && sim.releaseTimer >= HEADWAY - 1e-9;
+      if (expired || empty) {
+        endSlice(sim);
+        const next = pickLane(sim, algo, aging);
+        if (next === lane) startSlice(sim, lane); // same lane keeps going: no context switch
+        else if (next !== null) sim.clearance = CLEARANCE;
+      }
     }
   }
 
   // 3) Move the vehicles.
   for (const lane of DIRECTIONS) {
+    if (sim.emergencyState !== "IDLE" && lane !== sim.active) continue;
     queueOf(sim, lane).forEach((c, k) => {
       const target = slotPos(lane, k);
       if (c.progress < target) c.progress = Math.min(target, c.progress + CAR_SPEED * h);
@@ -254,6 +410,10 @@ function tick(sim: Sim, h: number, algo: Algo, quantum: number, aging: boolean) 
   const remaining: Car[] = [];
   for (const c of sim.cars) {
     if (c.released) {
+      if (sim.emergencyState !== "IDLE" && c.lane !== sim.active) {
+        remaining.push(c);
+        continue;
+      }
       c.progress += CAR_SPEED * h;
       if (c.progress >= 100) {
         sim.served++;
@@ -266,8 +426,40 @@ function tick(sim: Sim, h: number, algo: Algo, quantum: number, aging: boolean) 
   }
   sim.cars = remaining;
 
+  if (
+    sim.emergencyState === "ACTIVE" &&
+    sim.emergencyId !== null &&
+    !sim.cars.some((car) => car.id === sim.emergencyId) &&
+    !sim.emergencyAmbulancePassed
+  ) {
+    sim.emergencyAmbulancePassed = true;
+    sim.emergencyId = null;
+    if (sim.emergencyLane) {
+      sim.logs.push(
+        `Ambulance cleared, ${sim.emergencyLane} still GREEN, releasing remaining vehicles`
+      );
+    }
+  }
+
+  if (
+    sim.emergencyState === "ACTIVE" &&
+    sim.emergencyLane !== null &&
+    ((sim.emergencyAmbulancePassed &&
+      !queueOf(sim, sim.emergencyLane).some((car) => !car.emergency)) ||
+      sim.emergencyVehiclesReleased >= 6 ||
+      sim.emergencyGreenElapsed >= 8)
+  ) {
+    endSlice(sim);
+    sim.emergencyId = null;
+    sim.emergencyState = "CLEARING_TO_NORMAL";
+    sim.clearance = 1.5;
+    sim.logs.push("ALL-RED clearance");
+  }
+
   // 4) Done?
-  if (sim.cars.length === 0 && sim.active === null) sim.finished = true;
+  if (sim.cars.length === 0 && sim.active === null && sim.emergencyState === "IDLE") {
+    sim.finished = true;
+  }
 }
 
 /** Advance the simulation by `dt` seconds (internally split into small steps). */
@@ -289,7 +481,9 @@ export function snapshot(sim: Sim) {
     active: sim.active,
     clearing: sim.active === null && sim.clearance > 0,
     lastLane: sim.lastLane,
+    emergencyState: sim.emergencyState,
     segments: sim.segments.map((s) => ({ ...s })),
+    logs: [...sim.logs],
     contextSwitches: sim.contextSwitches,
     served: sim.served,
     avgWait: sim.served ? sim.waitSum / sim.served : 0,
