@@ -464,7 +464,7 @@ function tick(sim: Sim, h: number, algo: Algo, quantum: number, aging: boolean) 
 
 /** Advance the simulation by `dt` seconds (internally split into small steps). */
 export function step(sim: Sim, dt: number, algo: Algo, quantum: number, aging: boolean) {
-  const H = 0.05;
+  const H = 1 / 60;
   let left = dt;
   while (left > 1e-9 && !sim.finished) {
     const h = Math.min(H, left);

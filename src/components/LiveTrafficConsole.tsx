@@ -94,8 +94,8 @@ export const LiveTrafficConsole: React.FC = () => {
       const h = (box.h / 100) * canvas.height;
 
       // Color coding by detection type
-      let color = "#22d3ee"; // Cyan default
-      if (box.type === "queue") color = "#06b6d4";
+      let color = "#f59e0b";
+      if (box.type === "queue") color = "#f59e0b";
       if (box.type === "emergency") color = "#ef4444"; // Red for emergency
       if (box.type === "car") color = "#10b981"; // Emerald
 
@@ -150,24 +150,28 @@ export const LiveTrafficConsole: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6 font-mono text-slate-100">
+    <div className="space-y-6 font-sans text-slate-100">
       {/* Console Header */}
-      <div className="flex flex-wrap items-center justify-between p-4 bg-slate-900 border border-slate-700/60 rounded-xl">
+      <div className="traffic-surface flex flex-wrap items-center justify-between p-4 bg-slate-900 border border-slate-700/60 rounded-xl">
         <div className="flex items-center gap-3">
-          <span className="w-3 h-3 rounded-full bg-red-500 animate-ping" />
+          <span className="traffic-light" aria-label="Traffic signal: green">
+            <span className="traffic-light__bulb traffic-light__bulb--red" />
+            <span className="traffic-light__bulb traffic-light__bulb--amber" />
+            <span className="traffic-light__bulb traffic-light__bulb--green is-active" />
+          </span>
           <span className="text-xs font-bold text-white uppercase tracking-wider">
             LIVE INTERSECTION FEED — CAM-01 (AERIAL OVERHEAD STREAM)
           </span>
         </div>
-        <span className="text-[10px] bg-cyan-950 text-cyan-400 border border-cyan-500/30 px-2 py-0.5 rounded font-bold">
+        <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded font-bold">
           LIVE CANVAS TRACKING
         </span>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Video Player & Real-time Canvas */}
-        <div className="lg:col-span-7 bg-slate-900 border border-slate-700/60 p-4 rounded-2xl flex flex-col justify-between">
-          <div className="relative w-full h-80 bg-black rounded-xl border border-slate-800 overflow-hidden">
+        <div className="traffic-surface lg:col-span-7 bg-slate-900 border border-slate-700/60 p-4 rounded-2xl flex flex-col justify-between">
+          <div className="traffic-video-stage relative w-full h-80 bg-black rounded-xl border border-slate-800 overflow-hidden">
             
             {/* HTML5 Video */}
             <video
@@ -188,7 +192,7 @@ export const LiveTrafficConsole: React.FC = () => {
             />
 
             {/* Dynamic Real-time HUD */}
-            <div className="absolute top-3 left-3 bg-black/80 backdrop-blur-md border border-slate-700 px-3 py-1 text-[10px] text-cyan-400 rounded-md font-bold">
+            <div className="absolute top-3 left-3 bg-black/80 backdrop-blur-md border border-slate-700 px-3 py-1 text-[10px] text-emerald-400 rounded-md font-bold">
               YOLOv8 DETECTING: {totalVehicles} VEHICLES
             </div>
 
@@ -206,7 +210,7 @@ export const LiveTrafficConsole: React.FC = () => {
           <div className="flex items-center justify-between mt-4">
             <button
               onClick={togglePlay}
-              className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-cyan-400 rounded-lg transition-colors"
+              className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 border border-amber-500/30 text-xs font-bold text-amber-300 rounded-lg transition-colors"
             >
               {isPlaying ? "PAUSE FEED" : "RESUME FEED"}
             </button>
@@ -218,8 +222,8 @@ export const LiveTrafficConsole: React.FC = () => {
         </div>
 
         {/* Dynamic Scheduler Metrics */}
-        <div className="lg:col-span-5 bg-slate-900 border border-slate-700/60 p-5 rounded-2xl space-y-4">
-          <h3 className="text-xs font-bold text-cyan-400 uppercase tracking-wider">
+        <div className="traffic-surface lg:col-span-5 bg-slate-900 border border-slate-700/60 p-5 rounded-2xl space-y-4">
+          <h3 className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
             Vision-Driven Kernel Scheduler
           </h3>
 
@@ -237,7 +241,7 @@ export const LiveTrafficConsole: React.FC = () => {
                   <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
                     <div
                       className={`h-full transition-all duration-300 ${
-                        isSelected ? "bg-emerald-400" : "bg-cyan-500/60"
+                        isSelected ? "bg-emerald-400" : "bg-amber-500/55"
                       }`}
                       style={{ width: `${Math.min(100, count * 10)}%` }}
                     />
@@ -247,7 +251,7 @@ export const LiveTrafficConsole: React.FC = () => {
             })}
           </div>
 
-          <div className="p-4 rounded-xl bg-slate-850 border border-slate-700/50 mt-4 space-y-2">
+          <div className="traffic-surface p-4 rounded-xl bg-slate-850 border border-slate-700/50 mt-4 space-y-2">
             <span className="text-[10px] text-amber-400 font-bold block uppercase">
               Recommended Signal Action
             </span>
