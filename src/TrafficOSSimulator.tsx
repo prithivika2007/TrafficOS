@@ -1,26 +1,46 @@
-import React, { useState, useEffect } from 'react';
-import { Play, Pause, RotateCcw, Cpu } from 'lucide-react';
+import React, { useState, useEffect, useRef } from "react";
+import {
+  Algo,
+  Direction,
+  DIRECTIONS,
+  MAX_PER_LANE,
+  AGING_STEP,
+  Setup,
+  Sim,
+  Snapshot,
+  addVehicle,
+  createSim,
+  presetSetup,
+  snapshot,
+  step,
+} from "./simEngine";
 
-interface Vehicle {
-  id: string;
-  type: 'car' | 'bus' | 'emergency';
-  lane: 'North' | 'East' | 'South' | 'West';
-  burstTime: number;
-  priority: number;
-  waitingTime: number;
+interface TrafficOSSimulatorProps {
+  initialAlgoConfig?: {
+    algo?: string;
+    quantum?: number;
+  } | null;
 }
 
-export default function TrafficOSSimulator() {
-  const [algorithm, setAlgorithm] = useState<'RoundRobin' | 'Priority'>('RoundRobin');
-  const [isRunning, setIsRunning] = useState<boolean>(false);
-  const [activeLane, setActiveLane] = useState<'North' | 'East' | 'South' | 'West'>('North');
-  const [timeSlice, setTimeSlice] = useState<number>(3);
-  const [vehicles, setVehicles] = useState<Vehicle[]>([
-    { id: 'V1', type: 'car', lane: 'North', burstTime: 5, priority: 2, waitingTime: 0 },
-    { id: 'V2', type: 'bus', lane: 'East', burstTime: 8, priority: 3, waitingTime: 0 },
-    { id: 'V3', type: 'emergency', lane: 'South', burstTime: 3, priority: 1, waitingTime: 0 },
-    { id: 'V4', type: 'car', lane: 'West', burstTime: 4, priority: 2, waitingTime: 0 },
-  ]);
+const LANE_DOT: Record<Direction, string> = {
+  NORTH: "bg-rose-500 shadow-lg shadow-rose-500/50",
+  EAST: "bg-blue-500 shadow-lg shadow-blue-500/50",
+  SOUTH: "bg-purple-500 shadow-lg shadow-purple-500/50",
+  WEST: "bg-amber-500 shadow-lg shadow-amber-500/50",
+};
+const LANE_COLOR: Record<Direction, string> = {
+  NORTH: "#f43f5e",
+  EAST: "#3b82f6",
+  SOUTH: "#a855f7",
+  WEST: "#f59e0b",
+};
+const LANE_SHORT: Record<Direction, string> = { NORTH: "N", EAST: "E", SOUTH: "S", WEST: "W" };
+const CAR_ROTATION: Record<Direction, number> = {
+  NORTH: 180,
+  EAST: -90,
+  SOUTH: 0,
+  WEST: 90,
+};
 
 const ALGO_LABEL: Record<Algo, string> = {
   RR: "Round Robin (RR)",
@@ -122,25 +142,16 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
   cfgRef.current = { algo: selectedAlgo, quantum: timeQuantum, aging, speed };
 
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isRunning) {
-      interval = setInterval(() => {
-        setActiveLane((prev) => {
-          const currentIndex = lanes.indexOf(prev);
-          return lanes[(currentIndex + 1) % lanes.length];
-        });
-
-        setVehicles((prev) =>
-          prev.map((v) =>
-            v.lane === activeLane
-              ? { ...v, burstTime: Math.max(0, v.burstTime - 1) }
-              : { ...v, waitingTime: v.waitingTime + 1 }
-          )
-        );
-      }, 1500);
+    if (isAlgo(initialAlgoConfig?.algo)) {
+      const nextAlgo = initialAlgoConfig.algo;
+      if (nextAlgo !== selectedAlgo) {
+        setSelectedAlgo(nextAlgo);
+        setSetup(presetSetup(nextAlgo));
+        setEmergencyLane(null);
+      }
     }
-    return () => clearInterval(interval);
-  }, [isRunning, activeLane]);
+    if (initialAlgoConfig?.quantum) setTimeQuantum(initialAlgoConfig.quantum);
+  }, [initialAlgoConfig]);
 
   useEffect(() => {
     if (simRef.current.started) return;
@@ -262,6 +273,7 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
         )
       );
     }
+
   };
 
   const injectVehicle = (lane: Direction) => {
@@ -497,16 +509,10 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
                   : "bg-slate-800 text-slate-400 border-slate-700"
               }`}
             >
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                  {lane} Lane
-                </span>
-                <span
-                  className={`w-2.5 h-2.5 rounded-full ${
-                    isActive ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'
-                  }`}
-                />
-              </div>
+              <span className={`w-2 h-2 rounded-full ${aging ? "bg-emerald-400 animate-ping" : "bg-slate-500"}`} />
+              DYNAMIC AGING: {aging ? "ACTIVE" : "OFF"}
+            </button>
+          )}
 
           {/* Lane Workload Config */}
           <div className="space-y-2.5 pt-2 border-t border-slate-800/80">
@@ -657,19 +663,35 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
               >
                 {v.emergency ? (
                   <div
-                    key={v.id}
-                    className="flex items-center justify-between p-2 rounded-lg bg-slate-800/80 border border-slate-700/60 text-xs"
+                    aria-label="Ambulance"
+                    className="relative flex h-full w-full items-center justify-center text-lg drop-shadow-lg"
+                    style={{ transform: `rotate(${CAR_ROTATION[v.lane]}deg)` }}
                   >
-                    <span className="font-bold text-slate-200">{v.id}</span>
-                    <span className="text-[10px] bg-slate-900 px-1.5 py-0.5 rounded text-amber-400">
-                      Burst: {v.burstTime}s
-                    </span>
+                    🚑
+                    <span className="absolute left-1/2 top-0 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-rose-500 animate-ping" />
+                    <span className="absolute left-1/2 top-0 h-1.5 w-1.5 translate-x-1 rounded-full bg-blue-500 animate-ping" />
                   </div>
-                ))}
-                {laneVehicles.length === 0 && (
-                  <p className="text-[11px] text-slate-600 text-center pt-8">Queue Empty</p>
+                ) : (
+                  <svg
+                    viewBox="0 0 20 30"
+                    aria-hidden="true"
+                    className="w-full h-full drop-shadow-md"
+                    style={{ transform: `rotate(${CAR_ROTATION[v.lane]}deg)` }}
+                  >
+                    <path
+                      d="M6 1.5h8l3 5v17l-3 5H6l-3-5v-17l3-5Z"
+                      fill={LANE_COLOR[v.lane]}
+                      stroke="#0f172a"
+                      strokeWidth="1.2"
+                    />
+                    <path d="M5 8h10v7H5z" fill="#f8fafc" opacity="0.9" />
+                    <path d="M5 18h10v3H5z" fill="#0f172a" opacity="0.8" />
+                    <path d="M7 3.5h6" stroke="#fff" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
                 )}
               </div>
+            ))}
+          </div>
 
           {/* Circular Queue Traversal Grid */}
           <div className="traffic-surface mt-4 p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800">
@@ -902,3 +924,5 @@ export const TrafficOSSimulator: React.FC<TrafficOSSimulatorProps> = ({
     </div>
   );
 }
+
+export default TrafficOSSimulator;

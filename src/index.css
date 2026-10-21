@@ -29,7 +29,7 @@
     font-family: Inter, "Segoe UI", Calibri, ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background-image: 
+    background-image:
       linear-gradient(to bottom, rgba(245, 158, 11, 0.11), transparent 12rem),
       radial-gradient(circle at 12% 0%, rgba(239, 68, 68, 0.055) 0%, transparent 32%),
       radial-gradient(circle at 50% 0%, rgba(245, 158, 11, 0.08) 0%, transparent 42%),
